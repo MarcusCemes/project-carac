@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="motionReporter">
+    <Code><![CDATA[begin
+  while true
+    wait(!isEmpty())
+
+    while !isEmpty()
+      call sendStatus()
+      delay(REPORTING_INTERVAL)
+    endWhile
+
+    call sendStatus()
+  endWhile
+end
+]]></Code>
+  </Program>
+</Programs>
