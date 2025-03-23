@@ -4,10 +4,11 @@
     <Locals>
       <Local name="buffer" type="num" xsi:type="array" size="1024" />
       <Local name="bytesRead" type="num" xsi:type="array" size="1" />
-      <Local name="decodeBuffer" type="num" xsi:type="array" size="3" />
+      <Local name="sendAck" type="bool" xsi:type="array" size="1" />
     </Locals>
     <Code><![CDATA[begin
   while true
+    sendAck = true
     bytesRead = sioGet(socket, buffer)
 
     if bytesRead > 0
@@ -16,18 +17,21 @@
 
     if bytesRead == -1
       // Ignore timeouts/TCP termination
+      sendAck = false
 
     elseIf bytesRead < 2
       logMsg("[SOCKET] Too few bytes read, socket timeout?")
+      sendAck = false
 
     elseIf buffer[0] != MAGIC_HEADER
       logMsg("[SOCKET] Missing magic header", 3)
+      sendAck = false
 
-    elseIf buffer[1] == 0 and bytesRead == 3
-      logMsg("[SOCKET] Shutdown request")
+    elseIf buffer[1] == 1 and bytesRead == 3
+      logMsg("[SOCKET] Stop request")
 
       if buffer[2] == 1
-        logMsg("[SHUTDOWN] Returning to start")
+        logMsg("[STOP] Returning to start")
         resetMotion()
         enablePower()
         movej(BASE_POSE, mount, SLOW_CONFIG)
@@ -38,17 +42,72 @@
       taskCreate "~RemoteControl", 1, stop()
       return
 
-    elseIf buffer[1] == 1
-      logMsg("[SOCKET] Requesting motion")
+    elseIf buffer[1] == 2
+      logMsg("[SOCKET] Linear move request")
 
       wait(!motionQueued)
       call decodeLocation(target, buffer[2])
+      motionType = 0
+      selectedTool = endEffector
+      motionQueued = true
+
+    elseIf buffer[1] == 3
+      logMsg("[SOCKET] Direct move request")
+
+      wait(!motionQueued)
+      call decodeLocation(target, buffer[2])
+      motionType = 1
+      selectedTool = endEffector
+      motionQueued = true
+
+    elseIf buffer[1] == 4
+      logMsg("[SOCKET] Joint move request")
+
+      wait(!motionQueued)
+      call decodePose(pose, buffer[2])
+      motionType = 2
+      selectedTool = endEffector
+      motionQueued = true
+
+    elseIf buffer[1] == 5
+      logMsg("[SOCKET] Set speed request")
+      call decodeDesc(moveConfig, buffer[2])
+
+    elseIf buffer[1] == 6
+      logMsg("[SOCKET] Tool offset request")
+      call decodeTool(endEffector, buffer[2])
+
+    elseIf buffer[1] == 7 and bytesRead == 3
+      logMsg("[SOCKET] Set report frequency request")
+      fromBinary(buffer[2], 4, "4.0l", reportInterval)
+
+    elseIf buffer[1] == 8 and bytesRead == 3
+      logMsg("[SOCKET] Move home request")
+
+      wait(!motionQueued)
+
+      if buffer[2] == 2
+        pose = BASE_POSE
+      else
+        target = BASE_POSITION
+      endIf
+
+      motionType = buffer[2]
+      selectedTool = mount
       motionQueued = true
 
     else
       logMsg("[SOCKET] Unknown message")
+      sendAck = false
 
     endIf
+
+    if sendAck
+      buffer[0] = MAGIC_HEADER
+      buffer[1] = 254
+      sioSet(socket, buffer, 2)
+    endIf
+
   endWhile
 end
 ]]></Code>

@@ -7,7 +7,7 @@
 
     while !isEmpty()
       call sendStatus()
-      delay(REPORTING_INTERVAL)
+      delay(reportInterval)
     endWhile
 
     call sendStatus()

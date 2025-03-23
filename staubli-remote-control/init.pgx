@@ -2,9 +2,10 @@
 <Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
   <Program name="init">
     <Code><![CDATA[begin
+  moveConfig = NOMINAL_CONFIG
   motionQueued = false
-
-  REPORTING_INTERVAL = 0.1
+  reportInterval = 0.1
+  selectedTool = endEffector
 end
 ]]></Code>
   </Program>

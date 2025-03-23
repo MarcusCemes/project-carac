@@ -6,7 +6,20 @@
   while true
     wait(motionQueued)
     motionQueued = false
-    movel(target, endEffector, NOMINAL_CONFIG)
+
+    if motionType == 0
+      logMsg("[MOTION] Linear move")
+      movel(target, selectedTool, moveConfig)
+
+    elseIf motionType == 1
+      logMsg("[MOTION] Direct move")
+      movej(target, selectedTool, moveConfig)
+
+    elseIf motionType == 2
+      logMsg("[MOTION] Joint move")
+      movej(pose, selectedTool, moveConfig)
+    endIf
+
   endWhile
 end
 ]]></Code>
