@@ -4,7 +4,7 @@
     <Code><![CDATA[begin
   moveConfig = NOMINAL_CONFIG
   motionQueued = false
-  reportInterval = 0.1
+  reportInterval = 0.05
   selectedTool = endEffector
 end
 ]]></Code>

@@ -13,6 +13,8 @@
   endWhile
 
   disablePower()
+
+  call sendPowerOff()
 end
 ]]></Code>
   </Program>

@@ -12,7 +12,10 @@
     <Program file="motionReporter.pgx" />
     <Program file="motionSupervisor.pgx" />
     <Program file="motionWorker.pgx" />
+    <Program file="sendAck.pgx" />
+    <Program file="sendComplete.pgx" />
     <Program file="sendError.pgx" />
+    <Program file="sendPowerOff.pgx" />
     <Program file="sendStatus.pgx" />
     <Program file="socketHandler.pgx" />
     <Program file="start.pgx" />

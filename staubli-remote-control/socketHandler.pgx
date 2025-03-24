@@ -32,10 +32,11 @@
 
       if buffer[2] == 1
         logMsg("[STOP] Returning to start")
+        call sendAck()
         resetMotion()
         enablePower()
         movej(BASE_POSE, mount, SLOW_CONFIG)
-        wait(isEmpty() and isSettled())
+        waitEndMove()
       endIf
 
       // Manually create the program stop task
@@ -103,9 +104,7 @@
     endIf
 
     if sendAck
-      buffer[0] = MAGIC_HEADER
-      buffer[1] = 254
-      sioSet(socket, buffer, 2)
+      call sendAck()
     endIf
 
   endWhile

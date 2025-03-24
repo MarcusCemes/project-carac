@@ -8,7 +8,7 @@
     </Locals>
     <Code><![CDATA[begin
   buffer[0] = MAGIC_HEADER
-  buffer[1] = 0
+  buffer[1] = 1
 
   currentPosition = here(endEffector, world)
   call encodePoint(currentPosition, buffer[2])

@@ -10,7 +10,7 @@
     </Locals>
     <Code><![CDATA[begin
   buffer[0] = MAGIC_HEADER
-  buffer[1] = 1
+  buffer[1] = 255
   buffer[2] = code
 
   toBinary(argument, 1, "2l", buffer[3])
