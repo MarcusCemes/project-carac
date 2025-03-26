@@ -1,0 +1,4 @@
+float32 translation_limit
+float32 rotation_limit
+uint8 acceleration_scale
+---

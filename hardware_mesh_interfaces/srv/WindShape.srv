@@ -1,0 +1,3 @@
+bool enable_power
+float32 fan_speed
+---

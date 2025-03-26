@@ -1,0 +1,12 @@
+launch:
+  - node:
+      pkg: "hardware_mesh"
+      exec: "robot_arm"
+      name: "robot_arm"
+      args: "--ros-args --log-level robot_arm:=debug"
+
+  - node:
+      pkg: "hardware_mesh"
+      exec: "wind_shape"
+      name: "wind_shape"
+      args: "--ros-args --log-level wind_shape:=debug"

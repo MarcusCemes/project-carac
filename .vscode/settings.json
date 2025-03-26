@@ -1,0 +1,8 @@
+{
+  "python.analysis.packageIndexDepths": [
+    {
+      "name": "rclpy",
+      "depth": 8
+    }
+  ]
+}
