@@ -4,25 +4,19 @@ from typing import Callable
 
 from rclpy import init
 
-from hardware_mesh_interfaces.srv import (
-    WindShape as WindShapeSrv,
-    WindShape_Request,
-    WindShape_Response,
-)
+from hardware_mesh_interfaces import srv
 
-from hardware_mesh.lib.async_node import AsyncNode, spin_async
+from ..defs import DEFAULT_TIMEOUT, Services
+from ..lib.async_node import AsyncNode, spin_async
 
-DEFAULT_ADDR = "192.168.88.40"
+DEFAULT_IP = "192.168.88.40"
 LOCAL_PORT = 60333
 REMOTE_PORT = 60334
-TIMEOUT_S = 3
 
 BUFFER_SIZE = 8192
 HEARTBEAT_INTERVAL_S = 0.04
 MODULES = 56
 MODULE_FANS = 18
-
-SERVICE_NAME = "wind_shape"
 
 
 @dataclass
@@ -69,7 +63,11 @@ class Protocol(DatagramProtocol):
 
 class WindShape(AsyncNode):
 
-    def __init__(self, addr: str = DEFAULT_ADDR):
+    def __init__(
+        self,
+        addr=DEFAULT_IP,
+        heartbeat_s=HEARTBEAT_INTERVAL_S,
+    ):
         super().__init__(WindShape.__name__)
 
         self._addr = addr
@@ -77,8 +75,8 @@ class WindShape(AsyncNode):
 
         self._in_control = False
 
-        self.create_service(WindShapeSrv, SERVICE_NAME, self.service)
-        self.create_timer(HEARTBEAT_INTERVAL_S, self._send_status)
+        self.create_service(srv.WindShape, Services.WindShape, self.service)
+        self.create_timer(heartbeat_s, self._send_status)
 
     async def __aenter__(self):
         self._loop = get_event_loop()
@@ -92,10 +90,10 @@ class WindShape(AsyncNode):
         self._send("REQUEST_CONNECTION", "no_message")
 
         try:
-            msg = await wait_for(self._recv(), TIMEOUT_S)
+            msg = await wait_for(self._recv(), DEFAULT_TIMEOUT)
 
-        except TimeoutError:
-            error = "Handshake failure. No response from WindShape"
+        except Exception:
+            error = "Handshake failure"
             self.get_logger().error(error)
             raise RuntimeError(error)
 
@@ -126,9 +124,9 @@ class WindShape(AsyncNode):
 
     def service(
         self,
-        request: WindShape_Request,
-        response: WindShape_Response,
-    ) -> WindShape_Response:
+        request: srv.WindShape_Request,
+        response: srv.WindShape_Response,
+    ) -> srv.WindShape_Response:
         self.get_logger().debug(
             f"Power: {request.enable_power} | Speed: {request.fan_speed}"
         )

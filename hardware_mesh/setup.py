@@ -22,8 +22,9 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "wind_shape = hardware_mesh.nodes.wind_shape:main",
+            "load_cell = hardware_mesh.nodes.load_cell:main",
             "robot_arm = hardware_mesh.nodes.robot_arm:main",
+            "wind_shape = hardware_mesh.nodes.wind_shape:main",
         ],
     },
 )

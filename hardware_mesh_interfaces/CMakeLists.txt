@@ -6,7 +6,11 @@ find_package(geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/RobotArmPosition.msg"
+  "msg/LoadCellData.msg"
+  "msg/RobotArmPose.msg"
+
+  "srv/LoadCellSetBias.srv"
+  "srv/LoadCellStream.srv"
   "srv/RobotArmConfig.srv"
   "srv/RobotArmTool.srv"
   "srv/WindShape.srv"

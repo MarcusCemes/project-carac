@@ -10,3 +10,9 @@ launch:
       exec: "wind_shape"
       name: "wind_shape"
       args: "--ros-args --log-level wind_shape:=debug"
+
+  - node:
+      pkg: "hardware_mesh"
+      exec: "load_cell"
+      name: "load_cell"
+      args: "--ros-args --log-level load_cell:=debug"
