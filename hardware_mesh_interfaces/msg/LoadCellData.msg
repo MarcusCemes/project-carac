@@ -1,6 +1,6 @@
-int32 fx
-int32 fy
-int32 fz
-int32 tx
-int32 ty
-int32 tz
+float32 fx
+float32 fy
+float32 fz
+float32 tx
+float32 ty
+float32 tz

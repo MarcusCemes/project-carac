@@ -7,6 +7,7 @@ from asyncio import (
 )
 from contextlib import AbstractAsyncContextManager
 from queue import Queue
+from sys import stderr
 from threading import Thread
 from typing import Awaitable
 
@@ -41,7 +42,9 @@ def spin_async(node: AsyncNode, thread_name=THREAD_NAME):
         pass
 
     finally:
-        loop.call_soon_threadsafe(abort.set)
+        if loop.is_running():
+            loop.call_soon_threadsafe(abort.set)
+
         executor.shutdown()
 
 
@@ -50,6 +53,10 @@ def _run_task(loop: AbstractEventLoop, task: Awaitable):
 
     try:
         loop.run_until_complete(task)
+
+    except Exception as e:
+        print("Task error:", e, file=stderr)
+        raise
 
     finally:
         _shutdown_loop(loop)
@@ -63,6 +70,7 @@ async def _background_task(node: AsyncNode, ready: Queue[bool], abort: Event):
 
     except Exception:
         ready.put(False)
+        raise
 
 
 def _shutdown_loop(loop: AbstractEventLoop):
