@@ -1,0 +1,42 @@
+use bincode::{Decode, Encode};
+use quaternion::{euler_angles, Quaternion};
+
+pub type Vec3<T> = [T; 3];
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
+pub struct Pose {
+    pub position: Vec3<f32>,
+    pub orientation: Quaternion<f32>,
+}
+
+impl Pose {
+    pub fn to_array(self) -> [f32; 7] {
+        let mut array = [0.; 7];
+        array[0..3].copy_from_slice(&self.position);
+        array[3] = self.orientation.0;
+        array[4..7].copy_from_slice(&self.orientation.1);
+        array
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub rx: f32,
+    pub ry: f32,
+    pub rz: f32,
+}
+
+impl From<Point> for Pose {
+    fn from(point: Point) -> Self {
+        Pose {
+            position: [point.x, point.y, point.z],
+            orientation: euler_angles(point.rx, point.ry, point.rz),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
+pub struct Joint([f32; 6]);

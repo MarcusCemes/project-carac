@@ -12,32 +12,23 @@ use tokio::{
     time::timeout,
 };
 
+use crate::{defs::*, recorder::RecordHandle};
+
+const DIMENSIONS: usize = 7;
+
 const ACK_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_IP: &str = "192.168.100.254";
+const DEFAULT_PORT: u16 = 20000;
 const MAGIC_HEADER: u8 = 0x95;
-const PORT: u16 = 20000;
 
 pub struct RobotArm {
     ack: mpsc::Receiver<()>,
     moving: watch::Receiver<bool>,
-    report: watch::Receiver<Option<Report>>,
     socket: OwnedWriteHalf,
 
     #[allow(dead_code)]
     task_handle: JoinSet<()>,
 }
-
-#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub rx: f32,
-    pub ry: f32,
-    pub rz: f32,
-}
-
-#[derive(Copy, Clone, Debug, Encode, Decode)]
-pub struct Joint([f32; 6]);
 
 #[derive(Copy, Clone, Debug, Encode, Decode)]
 pub struct MotionConfig {
@@ -62,7 +53,7 @@ enum Response {
     Report(Report),
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode)]
+#[derive(Decode)]
 struct Report {
     position: Point,
     pose: Joint,
@@ -73,15 +64,21 @@ struct Report {
 struct ResponseError;
 
 impl RobotArm {
-    pub async fn connect(addr: &str) -> io::Result<RobotArm> {
-        let (socket_rx, socket) = TcpStream::connect((addr, PORT)).await?.into_split();
+    pub async fn connect(
+        ip: Option<&str>,
+        port: Option<u16>,
+        record: Option<RecordHandle<DIMENSIONS>>,
+    ) -> io::Result<RobotArm> {
+        let ip = ip.unwrap_or(DEFAULT_IP);
+        let port = port.unwrap_or(DEFAULT_PORT);
 
-        let (task_handle, ack, moving, report) = Self::spawn_tasks(socket_rx);
+        let (socket_rx, socket) = TcpStream::connect((ip, port)).await?.into_split();
+
+        let (task_handle, ack, moving) = Self::spawn_tasks(socket_rx, record);
 
         Ok(RobotArm {
             ack,
             moving,
-            report,
             socket,
             task_handle,
         })
@@ -124,10 +121,18 @@ impl RobotArm {
     }
 
     pub async fn return_home(&mut self) {
-        self.send_command(0x08, &[]).await;
+        self.send_command(0x08, &[2]).await;
     }
 
     pub async fn wait_motion(&mut self) {
+        loop {
+            if *self.moving.borrow() {
+                break;
+            }
+
+            self.moving.changed().await.unwrap();
+        }
+
         loop {
             if !*self.moving.borrow() {
                 break;
@@ -166,28 +171,23 @@ impl RobotArm {
 
     fn spawn_tasks(
         socket: OwnedReadHalf,
-    ) -> (
-        JoinSet<()>,
-        mpsc::Receiver<()>,
-        watch::Receiver<bool>,
-        watch::Receiver<Option<Report>>,
-    ) {
+        record: Option<RecordHandle<DIMENSIONS>>,
+    ) -> (JoinSet<()>, mpsc::Receiver<()>, watch::Receiver<bool>) {
         let (ack_tx, ack_rx) = mpsc::channel(1);
         let (moving_tx, moving_rx) = watch::channel(false);
-        let (report_tx, report_rx) = watch::channel(None);
 
         let mut set = JoinSet::new();
 
-        set.spawn(Self::receiver(ack_tx, moving_tx, report_tx, socket));
+        set.spawn(Self::receiver_task(ack_tx, moving_tx, socket, record));
 
-        (set, ack_rx, moving_rx, report_rx)
+        (set, ack_rx, moving_rx)
     }
 
-    async fn receiver(
+    async fn receiver_task(
         ack: mpsc::Sender<()>,
-        moving_tx: watch::Sender<bool>,
-        report_tx: watch::Sender<Option<Report>>,
+        moving: watch::Sender<bool>,
         mut socket: OwnedReadHalf,
+        record: Option<RecordHandle<DIMENSIONS>>,
     ) {
         loop {
             if socket.read_u8().await.unwrap() != MAGIC_HEADER {
@@ -199,8 +199,12 @@ impl RobotArm {
 
             match response {
                 Response::Report(report) => {
-                    moving_tx.send(true).unwrap();
-                    report_tx.send(Some(report)).unwrap();
+                    moving.send(true).unwrap();
+
+                    if let Some(ref record) = record {
+                        let pose = Pose::from(report.position);
+                        record.append(pose.to_array()).await;
+                    }
                 }
 
                 Response::Ack => {
@@ -213,7 +217,7 @@ impl RobotArm {
 
                 Response::MotionComplete => {
                     tracing::info!("Motion complete");
-                    moving_tx.send(false).unwrap();
+                    moving.send(false).unwrap();
                 }
 
                 Response::PowerOff => {

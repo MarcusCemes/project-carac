@@ -9,6 +9,8 @@ use tokio::{
     time::{interval, timeout},
 };
 
+const DEFAULT_IP: &str = "192.168.88.40";
+
 const MODULE_COUNT: usize = 56;
 const MODULE_FANS: usize = 18;
 
@@ -67,8 +69,9 @@ enum ResponsePayload {
 }
 
 impl WindShape {
-    pub async fn connect(addr: &str) -> io::Result<WindShape> {
-        let link = Link::connect(addr).await;
+    pub async fn connect(ip: Option<&str>) -> io::Result<WindShape> {
+        let ip = ip.unwrap_or(DEFAULT_IP);
+        let link = Link::connect(ip).await;
 
         // Attempt to handshake with the device with a timeout
         link.send_request(Request::InitiateConnection, 0).await?;

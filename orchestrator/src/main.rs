@@ -1,3 +1,5 @@
+use std::io;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -10,15 +12,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Test,
+    Run,
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
+async fn main() -> io::Result<()> {
+    tracing_subscriber::fmt().init();
+
     let cli = Cli::parse();
 
     match cli.command {
         Command::Test => run_test().await,
+        Command::Run => orchestrator::run().await?,
     }
+
+    Ok(())
 }
 
 async fn run_test() {

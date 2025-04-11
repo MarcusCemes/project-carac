@@ -1,5 +1,6 @@
 from asyncio import (
     AbstractEventLoop,
+    CancelledError,
     Event,
     all_tasks,
     new_event_loop,
@@ -54,11 +55,11 @@ def _run_task(loop: AbstractEventLoop, task: Awaitable):
     try:
         loop.run_until_complete(task)
 
+    except CancelledError:
+        pass
+
     except Exception as e:
         print("Task error:", e, file=stderr)
-        raise
-
-    finally:
         _shutdown_loop(loop)
 
 

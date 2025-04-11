@@ -14,7 +14,7 @@
 
   disablePower()
 
-  call sendPowerOff()
+  // call sendPowerOff()
 end
 ]]></Code>
   </Program>

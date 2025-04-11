@@ -78,7 +78,7 @@
       logMsg("[SOCKET] Tool offset request")
       call decodeTool(endEffector, buffer[2])
 
-    elseIf buffer[1] == 7 and bytesRead == 3
+    elseIf buffer[1] == 7 and bytesRead == 6
       logMsg("[SOCKET] Set report frequency request")
       fromBinary(buffer[2], 4, "4.0l", reportInterval)
 

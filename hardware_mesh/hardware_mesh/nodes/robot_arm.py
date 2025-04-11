@@ -68,23 +68,12 @@ class RobotState:
     error: list[float]
 
 
-class Protocol(DatagramProtocol):
-    def __init__(
-        self, callback: Callable[[bytes], None], ip=DEFAULT_IP, port=DEFAULT_PORT
-    ):
-        self._addr = (ip, port)
-        self._callback = callback
-
-    def datagram_received(self, data: bytes, _) -> None:
-        self._callback(data)
-
-
 class RobotArm(AsyncNode):
 
-    def __init__(self, addr: str = DEFAULT_IP):
+    def __init__(self, ip=DEFAULT_IP, port=DEFAULT_PORT) -> None:
         super().__init__(RobotArm.__name__)
 
-        self._addr = addr
+        self._addr = (ip, port)
         self._moving = False
 
         self._pose_publisher = self.create_publisher(
@@ -110,7 +99,7 @@ class RobotArm(AsyncNode):
     async def __aenter__(self):
         self._loop = get_event_loop()
 
-        self.get_logger().info(f"Connecting to {self._addr}")
+        self.get_logger().info(f"Connecting to {self._addr[0]}:{self._addr[1]}")
 
         try:
             (reader, self._writer) = await wait_for(
@@ -119,7 +108,7 @@ class RobotArm(AsyncNode):
             )
 
         except Exception:
-            error = f"Connection to {self._addr} failed"
+            error = f"Connection to {self._addr[0]}:{self._addr[1]} failed"
             self.get_logger().error(error)
             raise RuntimeError(error)
 
