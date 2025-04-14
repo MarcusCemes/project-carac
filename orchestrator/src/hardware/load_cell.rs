@@ -1,9 +1,8 @@
 use std::{io, mem, net::Ipv4Addr, sync::Arc};
 
-use bincode::{
-    config::standard, decode_from_slice, encode_into_slice, error::DecodeError, Decode, Encode,
-};
+use bincode::{config, error::DecodeError, Decode, Encode};
 use reqwest::get;
+use serde::Deserialize;
 use tokio::{net::UdpSocket, task::JoinHandle};
 
 use crate::recorder::RecordHandle;
@@ -14,7 +13,7 @@ const DEFAULT_IP: &str = "192.168.1.1";
 const PORT: u16 = 49152;
 
 const COMMAND_HEADER: u16 = 0x1234;
-const DEFAULT_BUFFER_SIZE: usize = 8192; // 8KB
+const BUFFER_SIZE: usize = 8192; // 8KB
 pub struct LoadCell {
     socket: Arc<UdpSocket>,
     task: JoinHandle<Result<(), TaskError>>,
@@ -40,12 +39,27 @@ struct Command {
     sample_count: u32,
 }
 
+#[derive(Deserialize)]
+struct XmlConfig {
+    #[serde(rename = "scalfu")]
+    force_unit: String,
+    #[serde(rename = "scaltu")]
+    torque_unit: String,
+    #[serde(rename = "calcpf")]
+    force_counts: u32,
+    #[serde(rename = "calcpt")]
+    torque_counts: u32,
+}
+
 impl LoadCell {
-    pub async fn create(ip: Option<&str>, record: RecordHandle<DIMENSIONS>) -> Result<Self, Error> {
-        let counts = Self::fetch_config(ip.unwrap_or(DEFAULT_IP)).await?;
+    pub async fn connect(
+        ip: Option<&str>,
+        record: RecordHandle<DIMENSIONS>,
+    ) -> Result<Self, Error> {
+        let ip = ip.unwrap_or(DEFAULT_IP);
+        let counts = Self::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-        let ip = ip.unwrap_or(DEFAULT_IP);
         socket.connect((ip, PORT)).await?;
 
         let socket = Arc::new(socket);
@@ -64,7 +78,24 @@ impl LoadCell {
         };
 
         let mut buf = [0; BUFFER_SIZE];
-        encode_into_slice(command, &mut buf, standard()).unwrap();
+        bincode::encode_into_slice(command, &mut buf, config()).unwrap();
+
+        self.socket.send(&buf).await?;
+
+        Ok(())
+    }
+
+    pub async fn set_bias(&self) -> io::Result<()> {
+        const BUFFER_SIZE: usize = mem::size_of::<Command>();
+
+        let command = Command {
+            header: COMMAND_HEADER,
+            command: 0x42,
+            sample_count: 0,
+        };
+
+        let mut buf = [0; BUFFER_SIZE];
+        bincode::encode_into_slice(command, &mut buf, config()).unwrap();
 
         self.socket.send(&buf).await?;
 
@@ -72,26 +103,24 @@ impl LoadCell {
     }
 
     async fn fetch_config(ip: &str) -> Result<(u32, u32), Error> {
-        let xml = get(&format!("http://{ip}/netftcalapi.xml"))
+        let xml_str = get(&format!("http://{ip}/netftcalapi.xml"))
             .await?
             .text()
             .await?;
 
-        let force_unit = find_xml_tag(&xml, "scalfu")?;
-        let torque_unit = find_xml_tag(&xml, "scaltu")?;
+        // Deserialize with serde and quick_xml
+        let config: XmlConfig = quick_xml::de::from_str(&xml_str)
+            .map_err(|_| Error::MalformedConfig("Failed to parse XML config".to_string()))?;
 
-        if force_unit != "N" {
-            tracing::warn!("Force unit is not N: {force_unit}");
+        if config.force_unit != "N" {
+            tracing::warn!("Force unit is not N: {}", config.force_unit);
         }
 
-        if torque_unit != "Nm" {
-            tracing::warn!("Torque unit is not Nm: {torque_unit}");
+        if config.torque_unit != "Nm" {
+            tracing::warn!("Torque unit is not Nm: {}", config.torque_unit);
         }
 
-        Ok((
-            find_xml_tag_u32(&xml, "calcpf")?,
-            find_xml_tag_u32(&xml, "calcpt")?,
-        ))
+        Ok((config.force_counts, config.torque_counts))
     }
 
     async fn receiver_task(
@@ -99,12 +128,13 @@ impl LoadCell {
         record: RecordHandle<DIMENSIONS>,
         counts: (u32, u32),
     ) -> Result<(), TaskError> {
+        tracing::debug!("Starting receiver task");
         let (force_counts, torque_counts) = (counts.0 as f32, counts.1 as f32);
 
-        let mut buf = Vec::with_capacity(DEFAULT_BUFFER_SIZE);
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
-            socket.recv(&mut buf).await?;
+            socket.recv_buf(&mut buf).await?;
 
             let msg = parse_message(&buf)?;
 
@@ -148,37 +178,15 @@ struct Message {
 }
 
 fn parse_message(buf: &[u8]) -> Result<Message, DecodeError> {
-    Ok(decode_from_slice(buf, standard())?.0)
+    Ok(bincode::decode_from_slice(buf, config())?.0)
 }
 
 /* == Utils == */
 
-fn find_xml_tag_u32(xml: &str, tag: &str) -> Result<u32, Error> {
-    xml.lines()
-        .find_map(|line| {
-            line.contains(tag).then(|| {
-                let line = line.trim();
-                let start = line.find('<').unwrap() + 1;
-                let end = line.rfind('>').unwrap();
-                &line[start..end]
-            })
-        })
-        .ok_or_else(|| Error::MalformedConfig(format!("Tag {tag} not found in XML")))?
-        .parse()
-        .map_err(|_| Error::MalformedConfig(format!("Tag {tag} is not a valid u32")))
-}
-
-fn find_xml_tag<'a>(xml: &'a str, tag: &str) -> Result<&'a str, Error> {
-    xml.lines()
-        .find_map(|line| {
-            line.contains(tag).then(|| {
-                let line = line.trim();
-                let start = line.find('<').unwrap() + 1;
-                let end = line.rfind('>').unwrap();
-                &line[start..end]
-            })
-        })
-        .ok_or_else(|| Error::MalformedConfig(format!("Tag {tag} not found in XML")))
+fn config() -> impl config::Config {
+    config::standard()
+        .with_big_endian()
+        .with_fixed_int_encoding()
 }
 
 impl From<io::Error> for Error {

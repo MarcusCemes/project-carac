@@ -1,6 +1,6 @@
 use std::{io, net::Ipv4Addr, str::FromStr, sync::Arc};
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use tokio::{net::UdpSocket, task::JoinHandle};
 
 use crate::recorder::RecordHandle;
@@ -14,12 +14,13 @@ const DEFAULT_MULTICAST_IP: &str = "239.255.42.99";
 const COMMAND_PORT: u16 = 1510;
 const DATA_PORT: u16 = 1511;
 
-const DEFAULT_BUFFER_CAPACITY: usize = 8192; // 8KB
+const BUFFER_SIZE: usize = 16384; // 8KB
 
 pub struct MotionCapture {
     task: JoinHandle<Result<(), TaskError>>,
 }
 
+#[derive(Debug)]
 enum TaskError {
     MalformedPacket,
     SocketClosed,
@@ -55,7 +56,7 @@ impl MotionCapture {
         socket: Arc<UdpSocket>,
         record: RecordHandle<DIMENSIONS>,
     ) -> Result<(), TaskError> {
-        let mut buf = Vec::with_capacity(DEFAULT_BUFFER_CAPACITY);
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
             socket
@@ -63,7 +64,12 @@ impl MotionCapture {
                 .await
                 .map_err(|_| TaskError::SocketClosed)?;
 
-            let frame = protocol::parse_frame_data(&buf).map_err(|_| TaskError::MalformedPacket)?;
+            let frame = protocol::parse_message(&*buf)
+                .and_then(|msg| protocol::parse_frame_data(msg.payload))
+                .map_err(|_| TaskError::MalformedPacket)
+                .inspect_err(|e| {
+                    tracing::error!("Failed to parse frame data: {:?}", e);
+                })?;
 
             if let Some(rigid_body) = frame.rigid_bodies.first() {
                 let p = &rigid_body.position;
@@ -83,8 +89,8 @@ impl MotionCapture {
         let msg = protocol::handshake_msg();
         socket.send(&msg.packet()).await?;
 
-        let mut buf = BytesMut::new();
-        socket.recv(&mut buf).await?;
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+        socket.recv_buf(&mut buf).await?;
 
         match protocol::parse_message(&mut Bytes::from(buf)) {
             Ok(msg) if msg.id == protocol::NAT_SERVERINFO => Ok(()),
@@ -102,15 +108,19 @@ impl MotionCapture {
         let msg = protocol::request_definitions_msg();
         socket.send(&msg.packet()).await?;
 
-        let mut buf = BytesMut::new();
-        socket.recv(&mut buf).await?;
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+        socket.recv_buf(&mut buf).await?;
+
+        tracing::info!("Received model definitions: {:?} B", buf.len());
 
         match protocol::parse_message(&mut Bytes::from(buf)) {
             Ok(msg) if msg.id == protocol::NAT_MODELDEF => {
                 let mut payload = Bytes::from(msg.payload);
+                tracing::debug!("Payload: {:?}", payload.len());
 
                 match protocol::parse_description(&mut payload) {
                     Ok(defs) => Ok(defs),
+
                     Err(_) => Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "Invalid model definitions",

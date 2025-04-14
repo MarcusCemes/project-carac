@@ -23,13 +23,16 @@ pub async fn run() -> io::Result<()> {
     let mut recorder = Recorder::new();
 
     let stream = recorder.add_stream(MOTION_CAPTURE_LABELS);
-    let _motion_capture = MotionCapture::create(None, stream).await;
+    let _motion_capture = MotionCapture::create(None, stream)
+        .await
+        .expect("Failed to create MotionCapture");
 
     let stream = recorder.add_stream(["fx", "fy", "fz", "tx", "ty", "tz"]);
-    let load_cell = LoadCell::create(None, stream)
+    let load_cell = LoadCell::connect(None, stream)
         .await
         .expect("Failed to create LoadCell");
 
+    load_cell.set_bias().await?;
     load_cell.set_streaming(true, None).await?;
 
     recorder.insert_tape(Some(Tape::new())).await;
@@ -37,8 +40,10 @@ pub async fn run() -> io::Result<()> {
     tracing::info!("Recording...");
     recorder.set_recording(true);
 
-    sleep_s(2.).await;
+    sleep_s(1.).await;
     recorder.set_recording(false);
+
+    load_cell.set_streaming(false, None).await?;
 
     let mut tape = recorder.insert_tape(None).await.unwrap();
 
@@ -49,7 +54,7 @@ pub async fn run() -> io::Result<()> {
 
     tape.reset();
 
-    load_cell.set_streaming(false, None).await?;
+    // load_cell.set_streaming(false, None).await?;
 
     Ok(())
 }

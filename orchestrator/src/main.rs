@@ -17,7 +17,7 @@ enum Command {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
 

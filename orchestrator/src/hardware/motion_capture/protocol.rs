@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, TryGetError};
+use bytes::{Buf, BufMut, Bytes, TryGetError};
 use std::{fmt, io, mem, string::FromUtf8Error};
 
 const NAME: &[u8] = b"Orchestrator";
@@ -64,7 +64,7 @@ impl From<FromUtf8Error> for ParseError {
     }
 }
 
-fn try_advance<B: Buf>(mut buf: B, size: usize) -> Result<(), ParseError> {
+fn try_advance<B: Buf>(buf: &mut B, size: usize) -> Result<(), ParseError> {
     if buf.remaining() < size {
         return Err(ParseError::UnexpectedEof);
     }
@@ -73,14 +73,13 @@ fn try_advance<B: Buf>(mut buf: B, size: usize) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn try_read_bytes<B: Buf>(mut buf: B, size: usize) -> Result<Box<[u8]>, ParseError> {
-    let mut data = Vec::with_capacity(size);
-    buf.try_copy_to_slice(&mut data)?;
-
-    Ok(data.into_boxed_slice())
+fn try_read_bytes<B: Buf>(buf: &mut B, size: usize) -> Result<Bytes, ParseError> {
+    let mut data = vec![0; size];
+    buf.try_copy_to_slice(data.as_mut_slice())?;
+    Ok(Bytes::from(data))
 }
 
-fn try_read_string<B: Buf>(mut buf: B) -> Result<String, ParseError> {
+fn try_read_string<B: Buf>(buf: &mut B) -> Result<String, ParseError> {
     let mut string = String::new();
 
     loop {
@@ -94,7 +93,7 @@ fn try_read_string<B: Buf>(mut buf: B) -> Result<String, ParseError> {
     }
 }
 
-fn try_read_vec3<B: Buf>(mut buf: B) -> Result<Vec3, ParseError> {
+fn try_read_vec3<B: Buf>(buf: &mut B) -> Result<Vec3, ParseError> {
     let x = buf.try_get_f32_le()?;
     let y = buf.try_get_f32_le()?;
     let z = buf.try_get_f32_le()?;
@@ -102,7 +101,7 @@ fn try_read_vec3<B: Buf>(mut buf: B) -> Result<Vec3, ParseError> {
     Ok((x, y, z))
 }
 
-fn try_read_vec4<B: Buf>(mut buf: B) -> Result<Vec4, ParseError> {
+fn try_read_vec4<B: Buf>(buf: &mut B) -> Result<Vec4, ParseError> {
     let x = buf.try_get_f32_le()?;
     let y = buf.try_get_f32_le()?;
     let z = buf.try_get_f32_le()?;
@@ -115,18 +114,18 @@ fn try_read_vec4<B: Buf>(mut buf: B) -> Result<Vec4, ParseError> {
 #[derive(Debug, Clone)]
 pub struct Message {
     pub id: u16,
-    pub payload: Box<[u8]>,
+    pub payload: Bytes,
 }
 
 impl Message {
-    pub fn packet(self) -> Box<[u8]> {
+    pub fn packet(self) -> Bytes {
         let mut buf = Vec::with_capacity(self.payload.len() + 4);
 
         buf.put_u16_le(self.id);
         buf.put_u16_le(self.payload.len() as u16);
         buf.put(&*self.payload);
 
-        buf.into_boxed_slice()
+        Bytes::from(buf)
     }
 }
 
@@ -174,6 +173,8 @@ pub struct DataFrame {
 // --- Top-Level Message Parser ---
 
 pub fn parse_message<B: Buf>(mut buf: B) -> Result<Message, ParseError> {
+    let buf = &mut buf;
+
     let id = buf.try_get_u16_le()?;
     let size = buf.try_get_u16_le()?;
     let payload = try_read_bytes(buf, size as usize)?;
@@ -183,13 +184,13 @@ pub fn parse_message<B: Buf>(mut buf: B) -> Result<Message, ParseError> {
 
 // --- Description Parsing (NAT_MODELDEF - NatNet v3.1) ---
 
-pub fn parse_description<B: Buf>(mut buf: B) -> Result<Description, ParseError> {
+pub fn parse_description<B: Buf>(buf: &mut B) -> Result<Description, ParseError> {
     let mut rigid_bodies = Vec::new();
 
     let n_datasets = buf.try_get_u32_le()?;
 
     for _ in 0..n_datasets {
-        if let Some(rigid_body) = parse_dataset(&mut buf)? {
+        if let Some(rigid_body) = parse_dataset(buf)? {
             rigid_bodies.push(rigid_body);
         }
     }
@@ -197,32 +198,34 @@ pub fn parse_description<B: Buf>(mut buf: B) -> Result<Description, ParseError> 
     Ok(Description { rigid_bodies })
 }
 
-fn parse_dataset<B: Buf>(mut buf: B) -> Result<Option<RigidBodyDesc>, ParseError> {
-    match buf.try_get_u32_le()? {
+fn parse_dataset<B: Buf>(buf: &mut B) -> Result<Option<RigidBodyDesc>, ParseError> {
+    let t = buf.try_get_u32_le()?;
+
+    match t {
         0x0 => skip_marketset_description(buf)?,
-        0x1 => return Ok(Some(parse_rigid_body_description(&mut buf)?)),
+        0x1 => return Ok(Some(parse_rigid_body_description(buf)?)),
         0x2 => skip_skeleton_description(buf)?,
-        0x3 => skip_camera_description(buf)?,
-        0x4 => skip_force_plate_description(buf)?,
-        0x5 => skip_device_description(buf)?,
+        0x3 => skip_force_plate_description(buf)?,
+        0x4 => skip_device_description(buf)?,
+        0x5 => skip_camera_description(buf)?,
         id => panic!("Unknown dataset type: {id}"),
     }
 
     Ok(None)
 }
 
-fn skip_marketset_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
-    let _name = try_read_string(&mut buf)?;
+fn skip_marketset_description<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
+    let _name = try_read_string(buf)?;
 
     for _ in 0..buf.try_get_u32_le()? {
-        let _marker = try_read_string(&mut buf)?;
+        let _marker = try_read_string(buf)?;
     }
 
     Ok(())
 }
 
-fn parse_rigid_body_description<B: Buf>(mut buf: B) -> Result<RigidBodyDesc, ParseError> {
-    let name = try_read_string(&mut buf)?;
+fn parse_rigid_body_description<B: Buf>(buf: &mut B) -> Result<RigidBodyDesc, ParseError> {
+    let name = try_read_string(buf)?;
 
     let id = buf.try_get_i32_le()?;
     let parent_id = buf.try_get_i32_le()?;
@@ -234,9 +237,10 @@ fn parse_rigid_body_description<B: Buf>(mut buf: B) -> Result<RigidBodyDesc, Par
     );
 
     // skip markers
-    const MARKER_SIZE: usize = 16; // 3 * f32 + u32
-    let block_size = buf.try_get_u32_le()? as usize * MARKER_SIZE;
-    try_advance(&mut buf, block_size)?;
+    let n_markers = buf.try_get_u32_le()?;
+    let block_size = n_markers as usize * mem::size_of::<(Vec3, u32)>();
+
+    try_advance(buf, block_size)?;
 
     Ok(RigidBodyDesc {
         id,
@@ -246,19 +250,19 @@ fn parse_rigid_body_description<B: Buf>(mut buf: B) -> Result<RigidBodyDesc, Par
     })
 }
 
-fn skip_skeleton_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
-    let _name = try_read_string(&mut buf)?;
+fn skip_skeleton_description<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
+    let _name = try_read_string(buf)?;
     let _id = buf.try_get_i32_le()?;
 
     for _ in 0..buf.try_get_u32_le()? {
-        parse_rigid_body_description(&mut buf)?;
+        parse_rigid_body_description(buf)?;
     }
 
     Ok(())
 }
 
-fn skip_camera_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
-    let _name = try_read_string(&mut buf)?;
+fn skip_camera_description<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
+    let _name = try_read_string(buf)?;
 
     const BLOCK_SIZE: usize = 28; // Vec3 + Vec4
     try_advance(buf, BLOCK_SIZE)?;
@@ -266,9 +270,9 @@ fn skip_camera_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn skip_force_plate_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_force_plate_description<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     let _id = buf.try_get_i32_le()?;
-    let _serial = try_read_string(&mut buf)?;
+    let _serial = try_read_string(buf)?;
     let _width = buf.try_get_f32_le()?;
     let _length = buf.try_get_f32_le()?;
 
@@ -279,27 +283,27 @@ fn skip_force_plate_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
     );
 
     const BLOCK_SIZE: usize = 624; // calibration matrix + corners
-    try_advance(&mut buf, BLOCK_SIZE)?;
+    try_advance(buf, BLOCK_SIZE)?;
 
     let _plate_type = buf.try_get_i32_le()?;
     let _channel_data_type = buf.try_get_i32_le()?;
 
     for _ in 0..buf.try_get_u32_le()? {
-        let _channel_name = try_read_string(&mut buf)?;
+        let _channel_name = try_read_string(buf)?;
     }
 
     Ok(())
 }
 
-fn skip_device_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_device_description<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     let _id = buf.try_get_i32_le()?;
-    let _name = try_read_string(&mut buf)?;
-    let _serial = try_read_string(&mut buf)?;
+    let _name = try_read_string(buf)?;
+    let _serial = try_read_string(buf)?;
     let _dev_type = buf.try_get_i32_le()?;
     let _channel_data_type = buf.try_get_i32_le()?;
 
     for _ in 0..buf.try_get_u32_le()? {
-        let _channel_name = try_read_string(&mut buf)?;
+        let _channel_name = try_read_string(buf)?;
     }
 
     Ok(())
@@ -308,41 +312,54 @@ fn skip_device_description<B: Buf>(mut buf: B) -> Result<(), ParseError> {
 // --- Frame Data Parsing (NAT_FRAMEOFDATA - NatNet v3.1) ---
 
 /// Parses the payload of a NAT_FRAMEOFDATA message (v3.1 format).
-pub fn parse_frame_data(mut buf: &[u8]) -> Result<DataFrame, ParseError> {
+pub fn parse_frame_data<B: Buf>(mut buf: B) -> Result<DataFrame, ParseError> {
+    let buf = &mut buf;
     let frame_number = buf.try_get_u32_le()?;
+    tracing::debug!("Frame number: {}", frame_number);
 
+    tracing::debug!("Reading markersets");
     skip_markersets(buf)?;
+    tracing::debug!("Reading legacy markers");
     skip_legacy_markers(buf)?;
 
+    tracing::debug!("Reading rigid bodies");
     let rigid_bodies = parse_rigid_body_data(buf)?;
 
+    tracing::debug!("Reading skeletons");
     skip_skeleton_data(buf)?;
+    tracing::debug!("Reading labelled markers");
     skip_labelled_markers(buf)?;
+    tracing::debug!("Reading force plates");
     skip_force_plates(buf)?;
+    tracing::debug!("Reading device data");
     skip_device_data(buf)?;
 
-    let suffix = parse_frame_suffix(&mut buf)?;
+    tracing::debug!("Reading frame suffix");
+    let suffix = parse_frame_suffix(buf).ok();
 
     Ok(DataFrame {
         frame_number,
         rigid_bodies,
-        suffix: Some(suffix),
+        suffix,
     })
 }
 
-fn skip_markersets<B: Buf>(mut buf: B) -> Result<(), ParseError> {
-    for _ in 0..buf.try_get_u32_le()? {
-        let _name = try_read_string(&mut buf)?;
+fn skip_markersets<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
+    let count = buf.try_get_u32_le()?;
+    tracing::debug!("Skipping {} markersets", count);
+
+    for _ in 0..count {
+        let _name = try_read_string(buf)?;
 
         let marker_count = buf.try_get_u32_le()?;
         let block_size = marker_count as usize * mem::size_of::<Vec3>();
-        try_advance(&mut buf, block_size)?;
+        try_advance(buf, block_size)?;
     }
 
     Ok(())
 }
 
-fn skip_legacy_markers<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_legacy_markers<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     let count = buf.try_get_u32_le()?;
     let block_size = count as usize * mem::size_of::<Vec3>();
     try_advance(buf, block_size)?;
@@ -350,7 +367,7 @@ fn skip_legacy_markers<B: Buf>(mut buf: B) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn parse_rigid_body_data<B: Buf>(mut buf: B) -> Result<Vec<RigidBodyData>, ParseError> {
+fn parse_rigid_body_data<B: Buf>(buf: &mut B) -> Result<Vec<RigidBodyData>, ParseError> {
     let count = buf.try_get_u32_le()?;
 
     let mut rigid_bodies = Vec::with_capacity(count as usize);
@@ -358,25 +375,28 @@ fn parse_rigid_body_data<B: Buf>(mut buf: B) -> Result<Vec<RigidBodyData>, Parse
     for _ in 0..count {
         rigid_bodies.push(RigidBodyData {
             id: buf.try_get_i32_le()?,
-            position: try_read_vec3(&mut buf)?,
-            orientation: try_read_vec4(&mut buf)?,
-            mean_marker_error: buf.try_get_f32_le()?, // Since v2.0
-            params: buf.try_get_i16_le()?,            // Since v2.6
+            position: try_read_vec3(buf)?,
+            orientation: try_read_vec4(buf)?,
+            mean_marker_error: buf.try_get_f32_le()?,
+            params: buf.try_get_i16_le()?,
         });
     }
+
     Ok(rigid_bodies)
 }
 
-fn skip_skeleton_data<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_skeleton_data<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     for _ in 0..buf.try_get_u32_le()? {
         let _id = buf.try_get_i32_le()?;
-        parse_rigid_body_data(&mut buf)?;
+        let bones = buf.try_get_u32_le()?;
+        const BLOCK_SIZE: usize = 38;
+        try_advance(buf, BLOCK_SIZE * bones as usize)?;
     }
 
     Ok(())
 }
 
-fn skip_labelled_markers<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_labelled_markers<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     // ID (u32), pos (Vec3), size (u32), params (i16), residual (u32)
     const BLOCK_SIZE: usize = 26;
 
@@ -386,7 +406,7 @@ fn skip_labelled_markers<B: Buf>(mut buf: B) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn skip_force_plates<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_force_plates<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     let count = buf.try_get_u32_le()?;
 
     for _ in 0..count {
@@ -395,7 +415,7 @@ fn skip_force_plates<B: Buf>(mut buf: B) -> Result<(), ParseError> {
 
         for _ in 0..n_channels {
             for _ in 0..buf.try_get_u32_le()? {
-                try_advance(&mut buf, mem::size_of::<f32>())?;
+                try_advance(buf, mem::size_of::<f32>())?;
             }
         }
     }
@@ -403,13 +423,13 @@ fn skip_force_plates<B: Buf>(mut buf: B) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn skip_device_data<B: Buf>(mut buf: B) -> Result<(), ParseError> {
+fn skip_device_data<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     for _ in 0..buf.try_get_u32_le()? {
         let _id = buf.try_get_u32_le()?;
 
         for _ in 0..buf.try_get_u32_le()? {
             for _ in 0..buf.try_get_u32_le()? {
-                try_advance(&mut buf, mem::size_of::<f32>())?;
+                try_advance(buf, mem::size_of::<f32>())?;
             }
         }
     }
@@ -462,13 +482,13 @@ pub fn handshake_msg() -> Message {
 
     Message {
         id: NAT_CONNECT,
-        payload: buf.into_boxed_slice(),
+        payload: Bytes::from(buf),
     }
 }
 
 pub fn request_definitions_msg() -> Message {
     Message {
         id: NAT_REQUEST_MODELDEF,
-        payload: Box::new([]),
+        payload: Bytes::new(),
     }
 }
