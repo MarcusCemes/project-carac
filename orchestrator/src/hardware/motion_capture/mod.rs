@@ -1,13 +1,11 @@
 use std::{io, net::Ipv4Addr, str::FromStr, sync::Arc};
 
 use bytes::Bytes;
-use tokio::{net::UdpSocket, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recorder::RecordHandle;
+use crate::recorder::{Recorder, StreamHandle};
 
 pub mod protocol;
-
-const DIMENSIONS: usize = 7;
 
 const DEFAULT_IP: &str = "192.168.100.184";
 const DEFAULT_MULTICAST_IP: &str = "239.255.42.99";
@@ -16,8 +14,18 @@ const DATA_PORT: u16 = 1511;
 
 const BUFFER_SIZE: usize = 16384; // 8KB
 
+const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
+const STREAM_NAME: &str = "motion_capture";
+
 pub struct MotionCapture {
+    inner: Arc<MotionCaptureInner>,
     task: JoinHandle<Result<(), TaskError>>,
+}
+
+struct MotionCaptureInner {
+    description: Mutex<protocol::Description>,
+    socket: UdpSocket,
+    subscriptions: Mutex<Vec<(i32, StreamHandle)>>,
 }
 
 #[derive(Debug)]
@@ -27,10 +35,7 @@ enum TaskError {
 }
 
 impl MotionCapture {
-    pub async fn create(
-        ip: Option<&str>,
-        record: RecordHandle<DIMENSIONS>,
-    ) -> io::Result<MotionCapture> {
+    pub async fn connect(ip: Option<&str>) -> io::Result<MotionCapture> {
         let description = {
             let ip = ip.unwrap_or(DEFAULT_IP);
 
@@ -41,25 +46,76 @@ impl MotionCapture {
             Self::get_model_definitions(&socket).await?
         };
 
-        let socket = Arc::new(UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DATA_PORT)).await?);
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DATA_PORT)).await?;
 
         let multicast_ip = Ipv4Addr::from_str(DEFAULT_MULTICAST_IP).unwrap();
         socket.join_multicast_v4(multicast_ip, Ipv4Addr::UNSPECIFIED)?;
 
-        let task = tokio::spawn(Self::receiver_task(description, socket, record));
+        let inner = Arc::new(MotionCaptureInner {
+            description: Mutex::new(description),
+            socket,
+            subscriptions: Default::default(),
+        });
 
-        Ok(MotionCapture { task })
+        let task = tokio::spawn(Self::receiver_task(inner.clone()));
+
+        Ok(MotionCapture { inner, task })
     }
 
-    async fn receiver_task(
-        _descriptions: protocol::Description,
-        socket: Arc<UdpSocket>,
-        record: RecordHandle<DIMENSIONS>,
-    ) -> Result<(), TaskError> {
+    pub async fn subscribe<S>(&self, name: S, recorder: &Recorder)
+    where
+        S: AsRef<str> + Into<String>,
+    {
+        let description_lock = self.inner.description.lock().await;
+
+        let rigid_body = description_lock
+            .get_rb(name.as_ref())
+            .expect("Rigid body not found");
+
+        let mut subscription_lock = self.inner.subscriptions.lock().await;
+
+        if subscription_lock.iter().any(|(id, _)| *id == rigid_body.id) {
+            tracing::warn!("Already subscribed to rigid body: {}", name.as_ref());
+            return;
+        }
+
+        if !subscription_lock.iter().any(|s| s.0 == rigid_body.id) {
+            let stream_name = format!("{STREAM_NAME}/{}", name.as_ref());
+            let stream = recorder.add_stream(stream_name, &CHANNELS).await;
+            subscription_lock.push((rigid_body.id, stream));
+        }
+    }
+
+    pub async fn unsubscribe(&self, name: &str) -> bool {
+        let description_lock = self.inner.description.lock().await;
+
+        if let Some(rigid_body) = description_lock.get_rb(name) {
+            let mut lock = self.inner.subscriptions.lock().await;
+
+            if let Some(pos) = lock.iter().position(|s| s.0 == rigid_body.id) {
+                lock.swap_remove(pos);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub async fn refresh_descriptions(&self) -> io::Result<()> {
+        let new_description = Self::get_model_definitions(&self.inner.socket).await?;
+        let mut description = self.inner.description.lock().await;
+
+        *description = new_description;
+
+        Ok(())
+    }
+
+    async fn receiver_task(inner: Arc<MotionCaptureInner>) -> Result<(), TaskError> {
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
-            socket
+            inner
+                .socket
                 .recv_buf(&mut buf)
                 .await
                 .map_err(|_| TaskError::SocketClosed)?;
@@ -71,12 +127,17 @@ impl MotionCapture {
                     tracing::error!("Failed to parse frame data: {:?}", e);
                 })?;
 
-            if let Some(rigid_body) = frame.rigid_bodies.first() {
-                let p = &rigid_body.position;
-                let q = &rigid_body.orientation;
-                let data = [p.0, p.1, p.2, q.0, q.1, q.2, q.3];
+            {
+                let subscriptions = inner.subscriptions.lock().await;
 
-                record.append(data).await;
+                for rb in frame.rigid_bodies {
+                    if let Some((_, stream)) = subscriptions.iter().find(|s| s.0 == rb.id) {
+                        let p = &rb.position;
+                        let q = &rb.orientation;
+
+                        stream.add(&[p.0, p.1, p.2, q.0, q.1, q.2, q.3]).await;
+                    }
+                }
             }
 
             buf.clear();
@@ -115,10 +176,7 @@ impl MotionCapture {
 
         match protocol::parse_message(&mut Bytes::from(buf)) {
             Ok(msg) if msg.id == protocol::NAT_MODELDEF => {
-                let mut payload = Bytes::from(msg.payload);
-                tracing::debug!("Payload: {:?}", payload.len());
-
-                match protocol::parse_description(&mut payload) {
+                match protocol::parse_description(msg.payload) {
                     Ok(defs) => Ok(defs),
 
                     Err(_) => Err(io::Error::new(

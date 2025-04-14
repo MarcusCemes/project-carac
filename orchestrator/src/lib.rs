@@ -1,7 +1,8 @@
+#![allow(dead_code)]
+
 use std::{io, time::Duration};
 
 use hardware::{load_cell::LoadCell, motion_capture::MotionCapture};
-use recorder::Tape;
 use tokio::time::sleep;
 
 use crate::{
@@ -17,46 +18,59 @@ mod defs;
 mod hardware;
 mod recorder;
 
-const MOTION_CAPTURE_LABELS: [&str; 7] = ["x", "y", "z", "i", "j", "k", "w"];
-
 pub async fn run() -> io::Result<()> {
-    let mut recorder = Recorder::new();
+    let ctx = Context::create().await;
+    let recorder = Recorder::new();
 
-    let stream = recorder.add_stream(MOTION_CAPTURE_LABELS);
-    let _motion_capture = MotionCapture::create(None, stream)
-        .await
-        .expect("Failed to create MotionCapture");
+    ctx.motion_capture.subscribe("Tapper", &recorder).await;
+    ctx.load_cell.subscribe(&recorder).await;
 
-    let stream = recorder.add_stream(["fx", "fy", "fz", "tx", "ty", "tz"]);
-    let load_cell = LoadCell::connect(None, stream)
-        .await
-        .expect("Failed to create LoadCell");
+    ctx.load_cell.set_bias().await?;
+    ctx.load_cell.start_streaming().await?;
 
-    load_cell.set_bias().await?;
-    load_cell.set_streaming(true, None).await?;
-
-    recorder.insert_tape(Some(Tape::new())).await;
-
-    tracing::info!("Recording...");
-    recorder.set_recording(true);
+    tracing::info!("Starting recording...");
+    recorder.new_recording().await;
+    recorder.start_recording().await;
 
     sleep_s(1.).await;
-    recorder.set_recording(false);
 
-    load_cell.set_streaming(false, None).await?;
+    recorder.stop_recording().await;
+    ctx.load_cell.stop_streaming().await?;
 
-    let mut tape = recorder.insert_tape(None).await.unwrap();
+    let recording = recorder.commit().await;
 
-    tracing::info!("Readout...");
-    for (time, id, data) in tape.iter_data(recorder.streams()) {
-        println!("Time: {}, ID: {}, Data: {:?}", time, id, data);
+    for measurement in recording.iter() {
+        println!(
+            "> {} {}: {:.02?}",
+            measurement.sample.time, measurement.sample.stream_id, measurement.data
+        );
     }
 
-    tape.reset();
-
-    // load_cell.set_streaming(false, None).await?;
-
     Ok(())
+}
+
+struct Context {
+    motion_capture: MotionCapture,
+    load_cell: LoadCell,
+    wind_shape: WindShape,
+}
+
+impl Context {
+    async fn create() -> Self {
+        Context {
+            motion_capture: MotionCapture::connect(None)
+                .await
+                .expect("Failed to connect to motion capture"),
+
+            load_cell: LoadCell::connect(None)
+                .await
+                .expect("Failed to connect to load cell"),
+
+            wind_shape: WindShape::connect(None)
+                .await
+                .expect("Failed to connect to WindShape"),
+        }
+    }
 }
 
 #[allow(dead_code)]

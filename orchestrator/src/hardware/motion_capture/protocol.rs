@@ -142,6 +142,12 @@ pub struct Description {
     pub rigid_bodies: Vec<RigidBodyDesc>,
 }
 
+impl Description {
+    pub fn get_rb(&self, name: &str) -> Option<&RigidBodyDesc> {
+        self.rigid_bodies.iter().find(|rb| rb.name == name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RigidBodyData {
     pub id: i32,
@@ -184,13 +190,15 @@ pub fn parse_message<B: Buf>(mut buf: B) -> Result<Message, ParseError> {
 
 // --- Description Parsing (NAT_MODELDEF - NatNet v3.1) ---
 
-pub fn parse_description<B: Buf>(buf: &mut B) -> Result<Description, ParseError> {
+pub fn parse_description<B: Buf>(mut buf: B) -> Result<Description, ParseError> {
+    let mut buf = &mut buf;
+
     let mut rigid_bodies = Vec::new();
 
     let n_datasets = buf.try_get_u32_le()?;
 
     for _ in 0..n_datasets {
-        if let Some(rigid_body) = parse_dataset(buf)? {
+        if let Some(rigid_body) = parse_dataset(&mut buf)? {
             rigid_bodies.push(rigid_body);
         }
     }

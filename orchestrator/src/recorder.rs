@@ -1,35 +1,30 @@
-use std::{
-    mem,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::sync::Arc;
 
 use bytes::{Buf, BufMut};
+use chunked_bytes::ChunkedBytes;
 use tokio::{sync::Mutex, time::Instant};
-
-const DEFAULT_CAPACITY: usize = 8388608; // 8MB
-
-pub struct Stream {
-    pub labels: Box<[String]>,
-}
 
 #[derive(Default)]
 pub struct Recorder {
-    inner: Arc<RecorderInner>,
+    inner: Arc<Mutex<RecorderInner>>,
+}
+
+struct RecorderInner {
+    buffer: RecordingBuffer,
+    recording: bool,
+    ref_time: Instant,
     streams: Vec<Stream>,
 }
 
-pub struct RecordHandle<const N: usize> {
-    inner: Arc<RecorderInner>,
-    stream_id: u8,
+#[derive(Clone, Debug)]
+pub struct Stream {
+    channels: Box<[String]>,
+    name: String,
 }
 
-#[derive(Default)]
-struct RecorderInner {
-    record: AtomicBool,
-    tape: Mutex<Option<Tape>>,
+pub struct StreamHandle {
+    recorder: Arc<Mutex<RecorderInner>>,
+    stream_id: u8,
 }
 
 impl Recorder {
@@ -37,111 +32,192 @@ impl Recorder {
         Self::default()
     }
 
-    pub async fn insert_tape(&mut self, tape: Option<Tape>) -> Option<Tape> {
-        let mut guard = self.inner.tape.lock().await;
-        mem::replace(&mut *guard, tape)
-    }
+    pub async fn add_stream<T, U>(&self, name: T, channels: &[U]) -> StreamHandle
+    where
+        T: ToString,
+        U: ToString,
+    {
+        let mut inner = self.inner.lock().await;
 
-    pub fn add_stream<S: Into<String>, const N: usize>(
-        &mut self,
-        labels: [S; N],
-    ) -> RecordHandle<N> {
-        let stream_id = self.streams.len() as u8;
+        if inner.streams.len() >= u8::MAX as usize {
+            panic!("Maximum number of streams reached");
+        }
 
-        self.streams.push(Stream {
-            labels: labels.map(|s| s.into()).into(),
-        });
+        let stream = Stream {
+            name: name.to_string(),
+            channels: channels
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        };
 
-        RecordHandle {
-            inner: self.inner.clone(),
+        let stream_id = inner.streams.len() as u8;
+        inner.streams.push(stream.clone());
+
+        let recorder = self.inner.clone();
+
+        StreamHandle {
+            recorder,
             stream_id,
         }
     }
 
-    pub fn set_recording(&self, record: bool) {
-        self.inner.record.store(record, Ordering::SeqCst);
+    pub async fn start_recording(&self) {
+        self.inner.lock().await.recording = true;
     }
 
-    pub fn streams(&self) -> &[Stream] {
-        &self.streams
+    pub async fn stop_recording(&self) {
+        self.inner.lock().await.recording = false;
+    }
+
+    pub async fn commit(&self) -> Recording {
+        let mut lock = self.inner.lock().await;
+        let streams = lock.streams.clone();
+        lock.buffer.commit(streams)
+    }
+
+    pub async fn new_recording(&self) {
+        self.inner.lock().await.buffer = RecordingBuffer::new();
+    }
+
+    pub async fn reset_reference_time(&self) {
+        self.inner.lock().await.ref_time = Instant::now();
+    }
+
+    pub async fn streams(&self) -> Vec<Stream> {
+        self.inner.lock().await.streams.clone()
     }
 }
 
-impl<const N: usize> RecordHandle<N> {
-    pub async fn append(&self, data: [f32; N]) {
-        if self.inner.record.load(Ordering::SeqCst) {
-            let mut guard = self.inner.tape.lock().await;
-
-            if let Some(tape) = &mut *guard {
-                tape.append(self.stream_id, &data).await;
-            }
-        }
+impl RecorderInner {
+    fn elapsed_micros(&self) -> u32 {
+        self.ref_time
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .expect("Time overflow")
     }
 }
 
-/* == Tape == */
-
-pub struct Tape {
-    data: Vec<u8>,
-    start: Instant,
-}
-
-impl Tape {
-    pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_CAPACITY)
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
+impl Default for RecorderInner {
+    fn default() -> Self {
         Self {
-            data: Vec::with_capacity(capacity),
-            start: Instant::now(),
+            buffer: RecordingBuffer::new(),
+            recording: false,
+            ref_time: Instant::now(),
+            streams: Vec::new(),
+        }
+    }
+}
+
+impl StreamHandle {
+    pub async fn add(&self, channels: &[f32]) {
+        let mut lock = self.recorder.lock().await;
+
+        debug_assert_eq!(
+            channels.len(),
+            lock.streams[self.stream_id as usize].channels.len()
+        );
+
+        if lock.recording {
+            let time = lock.elapsed_micros();
+            lock.buffer.add(time, self.stream_id, channels);
+        }
+    }
+}
+
+/* == RecordingBuffer == */
+
+#[derive(Default)]
+struct RecordingBuffer {
+    buffer: ChunkedBytes,
+}
+
+impl RecordingBuffer {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn add(&mut self, time: u32, stream_id: u8, channels: &[f32]) {
+        self.buffer.put_u32(time);
+        self.buffer.put_u8(stream_id);
+        self.buffer.put_u8(channels.len() as u8);
+
+        for &value in channels {
+            self.buffer.put_f32(value);
         }
     }
 
-    pub async fn append(&mut self, stream_id: u8, data: &[f32]) {
-        let buf = &mut self.data;
+    pub fn commit(&mut self, streams: Vec<Stream>) -> Recording {
+        let mut samples = Vec::new();
+        let mut sample_data = Vec::new();
 
-        buf.put_u64(self.start.elapsed().as_nanos() as u64);
-        buf.put_u8(stream_id);
+        loop {
+            if self.buffer.is_empty() {
+                break;
+            }
 
-        for value in data {
-            buf.put_f32(*value)
+            let time = self.buffer.get_u32();
+            let stream_id = self.buffer.get_u8();
+            let n_channels = self.buffer.get_u8();
+
+            samples.push(Sample {
+                time,
+                stream_id,
+                data_index: sample_data.len(),
+            });
+
+            sample_data.extend((0..n_channels).map(|_| self.buffer.get_f32()));
+        }
+
+        debug_assert!(self.buffer.is_empty());
+
+        samples.shrink_to_fit();
+        sample_data.shrink_to_fit();
+
+        Recording {
+            samples,
+            sample_data,
+            streams,
         }
     }
+}
 
-    pub fn reset(&mut self) {
-        self.data.clear();
-        self.start = Instant::now();
-    }
+/* == Recording == */
 
-    pub fn iter_data<'a>(
-        &'a self,
-        streams: &'a [Stream],
-    ) -> impl Iterator<Item = (u64, u8, Box<[f32]>)> + 'a {
-        let mut data = &self.data[..];
+pub struct Recording {
+    samples: Vec<Sample>,
+    sample_data: Vec<f32>,
+    streams: Vec<Stream>,
+}
 
-        std::iter::from_fn(move || {
-            if data.is_empty() {
-                return None;
-            }
+#[derive(Debug)]
+pub struct Sample {
+    pub time: u32,
+    pub stream_id: u8,
+    pub data_index: usize,
+}
 
-            let elapsed = data.get_u64();
-            let stream_id = data.get_u8();
+#[derive(Debug)]
+pub struct Measurement<'a> {
+    pub data: &'a [f32],
+    pub sample: &'a Sample,
+}
 
-            let n_labels = streams[stream_id as usize].labels.len();
-            let mut values = Vec::with_capacity(n_labels);
+impl Recording {
+    pub fn iter(&self) -> impl Iterator<Item = Measurement<'_>> + '_ {
+        self.samples.iter().map(move |sample| {
+            let data = &self.sample_data[sample.data_index..];
+            let stream = &self.streams[sample.stream_id as usize];
+            let date_index_end = sample.data_index + stream.channels.len();
+            let data = &data[sample.data_index..date_index_end];
 
-            for _ in 0..n_labels {
-                values.push(data.get_f32());
-            }
-
-            Some((elapsed, stream_id, values.into_boxed_slice()))
+            Measurement { data, sample }
         })
     }
-}
 
-impl Default for Tape {
-    fn default() -> Self {
-        Self::new()
+    pub fn sort(&mut self) {
+        self.samples.sort_by_key(|s| s.time);
     }
 }

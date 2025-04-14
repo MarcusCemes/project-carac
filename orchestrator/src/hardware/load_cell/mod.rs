@@ -3,21 +3,29 @@ use std::{io, mem, net::Ipv4Addr, sync::Arc};
 use bincode::{config, error::DecodeError, Decode, Encode};
 use reqwest::get;
 use serde::Deserialize;
-use tokio::{net::UdpSocket, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recorder::RecordHandle;
-
-const DIMENSIONS: usize = 6;
+use crate::recorder::{Recorder, StreamHandle};
 
 const DEFAULT_IP: &str = "192.168.1.1";
 const PORT: u16 = 49152;
 
 const COMMAND_HEADER: u16 = 0x1234;
 const BUFFER_SIZE: usize = 8192; // 8KB
+
+const STREAM_NAME: &str = "load_cell";
+const CHANNELS: [&str; 6] = ["fx", "fy", "fz", "tx", "ty", "tz"];
 pub struct LoadCell {
-    socket: Arc<UdpSocket>,
+    inner: Arc<LoadCellInner>,
     task: JoinHandle<Result<(), TaskError>>,
 }
+
+struct LoadCellInner {
+    link: Link,
+    stream: Mutex<Option<StreamHandle>>,
+}
+
+struct Link(UdpSocket);
 
 #[derive(Debug)]
 pub enum Error {
@@ -52,54 +60,38 @@ struct XmlConfig {
 }
 
 impl LoadCell {
-    pub async fn connect(
-        ip: Option<&str>,
-        record: RecordHandle<DIMENSIONS>,
-    ) -> Result<Self, Error> {
+    pub async fn connect(ip: Option<&str>) -> Result<Self, Error> {
         let ip = ip.unwrap_or(DEFAULT_IP);
         let counts = Self::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
         socket.connect((ip, PORT)).await?;
 
-        let socket = Arc::new(socket);
-        let task = tokio::spawn(Self::receiver_task(socket.clone(), record, counts));
+        let inner = Arc::new(LoadCellInner {
+            link: Link(socket),
+            stream: Default::default(),
+        });
 
-        Ok(LoadCell { socket, task })
+        let task = tokio::spawn(Self::receiver_task(inner.clone(), counts));
+
+        Ok(LoadCell { inner, task })
     }
 
-    pub async fn set_streaming(&self, stream: bool, samples: Option<u32>) -> io::Result<()> {
-        const BUFFER_SIZE: usize = mem::size_of::<Command>();
+    pub async fn subscribe(&self, recorder: &Recorder) {
+        let mut lock = self.inner.stream.lock().await;
+        *lock = Some(recorder.add_stream(STREAM_NAME, &CHANNELS).await);
+    }
 
-        let command = Command {
-            header: COMMAND_HEADER,
-            command: if stream { 0x2 } else { 0x0 },
-            sample_count: samples.unwrap_or(0),
-        };
+    pub async fn start_streaming(&self) -> io::Result<()> {
+        self.inner.link.send(Command::new(0x2)).await
+    }
 
-        let mut buf = [0; BUFFER_SIZE];
-        bincode::encode_into_slice(command, &mut buf, config()).unwrap();
-
-        self.socket.send(&buf).await?;
-
-        Ok(())
+    pub async fn stop_streaming(&self) -> io::Result<()> {
+        self.inner.link.send(Command::new(0x0)).await
     }
 
     pub async fn set_bias(&self) -> io::Result<()> {
-        const BUFFER_SIZE: usize = mem::size_of::<Command>();
-
-        let command = Command {
-            header: COMMAND_HEADER,
-            command: 0x42,
-            sample_count: 0,
-        };
-
-        let mut buf = [0; BUFFER_SIZE];
-        bincode::encode_into_slice(command, &mut buf, config()).unwrap();
-
-        self.socket.send(&buf).await?;
-
-        Ok(())
+        self.inner.link.send(Command::new(0x42)).await
     }
 
     async fn fetch_config(ip: &str) -> Result<(u32, u32), Error> {
@@ -123,31 +115,35 @@ impl LoadCell {
         Ok((config.force_counts, config.torque_counts))
     }
 
-    async fn receiver_task(
-        socket: Arc<UdpSocket>,
-        record: RecordHandle<DIMENSIONS>,
-        counts: (u32, u32),
-    ) -> Result<(), TaskError> {
-        tracing::debug!("Starting receiver task");
+    #[tracing::instrument(skip(inner))]
+    async fn receiver_task(inner: Arc<LoadCellInner>, counts: (u32, u32)) -> Result<(), TaskError> {
+        tracing::debug!("Receiver started");
+
         let (force_counts, torque_counts) = (counts.0 as f32, counts.1 as f32);
 
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
-            socket.recv_buf(&mut buf).await?;
+            inner.link.0.recv_buf(&mut buf).await?;
 
-            let msg = parse_message(&buf)?;
+            {
+                let lock = inner.stream.lock().await;
 
-            let payload = [
-                msg.fx as f32 / force_counts,
-                msg.fy as f32 / force_counts,
-                msg.fz as f32 / force_counts,
-                msg.tx as f32 / torque_counts,
-                msg.ty as f32 / torque_counts,
-                msg.tz as f32 / torque_counts,
-            ];
+                if let Some(ref stream) = *lock {
+                    let msg = parse_message(&buf)?;
 
-            record.append(payload).await;
+                    let payload = [
+                        msg.fx as f32 / force_counts,
+                        msg.fy as f32 / force_counts,
+                        msg.fz as f32 / force_counts,
+                        msg.tx as f32 / torque_counts,
+                        msg.ty as f32 / torque_counts,
+                        msg.tz as f32 / torque_counts,
+                    ];
+
+                    stream.add(&payload).await;
+                }
+            }
 
             buf.clear();
         }
@@ -156,8 +152,42 @@ impl LoadCell {
 
 impl Drop for LoadCell {
     fn drop(&mut self) {
-        tracing::warn!("Stopping task");
+        let inner = self.inner.clone();
+
+        tokio::spawn(async move {
+            let command = Command::new(0x0);
+            inner.link.send(command).await
+        });
+
         self.task.abort();
+    }
+}
+
+impl Link {
+    async fn send(&self, command: Command) -> io::Result<()> {
+        self.0.send(&command.encode()).await?;
+        Ok(())
+    }
+}
+
+impl Command {
+    fn new(command: u16) -> Self {
+        Self {
+            header: COMMAND_HEADER,
+            command,
+            sample_count: 0,
+        }
+    }
+
+    fn with_samples(mut self, sample_count: u32) -> Self {
+        self.sample_count = sample_count;
+        self
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        let mut buf = [0; mem::size_of::<Command>()];
+        bincode::encode_into_slice(self, &mut buf, binary_config()).unwrap();
+        buf
     }
 }
 
@@ -178,12 +208,12 @@ struct Message {
 }
 
 fn parse_message(buf: &[u8]) -> Result<Message, DecodeError> {
-    Ok(bincode::decode_from_slice(buf, config())?.0)
+    Ok(bincode::decode_from_slice(buf, binary_config())?.0)
 }
 
 /* == Utils == */
 
-fn config() -> impl config::Config {
+fn binary_config() -> impl config::Config {
     config::standard()
         .with_big_endian()
         .with_fixed_int_encoding()

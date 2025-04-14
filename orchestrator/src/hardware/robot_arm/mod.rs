@@ -12,9 +12,7 @@ use tokio::{
     time::timeout,
 };
 
-use crate::{defs::*, recorder::RecordHandle};
-
-const DIMENSIONS: usize = 7;
+use crate::{defs::*, recorder::StreamHandle};
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_IP: &str = "192.168.100.254";
@@ -67,7 +65,7 @@ impl RobotArm {
     pub async fn connect(
         ip: Option<&str>,
         port: Option<u16>,
-        record: Option<RecordHandle<DIMENSIONS>>,
+        record: Option<StreamHandle>,
     ) -> io::Result<RobotArm> {
         let ip = ip.unwrap_or(DEFAULT_IP);
         let port = port.unwrap_or(DEFAULT_PORT);
@@ -171,7 +169,7 @@ impl RobotArm {
 
     fn spawn_tasks(
         socket: OwnedReadHalf,
-        record: Option<RecordHandle<DIMENSIONS>>,
+        record: Option<StreamHandle>,
     ) -> (JoinSet<()>, mpsc::Receiver<()>, watch::Receiver<bool>) {
         let (ack_tx, ack_rx) = mpsc::channel(1);
         let (moving_tx, moving_rx) = watch::channel(false);
@@ -187,7 +185,7 @@ impl RobotArm {
         ack: mpsc::Sender<()>,
         moving: watch::Sender<bool>,
         mut socket: OwnedReadHalf,
-        record: Option<RecordHandle<DIMENSIONS>>,
+        record: Option<StreamHandle>,
     ) {
         loop {
             if socket.read_u8().await.unwrap() != MAGIC_HEADER {
@@ -203,7 +201,7 @@ impl RobotArm {
 
                     if let Some(ref record) = record {
                         let pose = Pose::from(report.position);
-                        record.append(pose.to_array()).await;
+                        record.add(&pose.to_array()).await;
                     }
                 }
 

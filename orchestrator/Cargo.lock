@@ -154,6 +154,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "chunked-bytes"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfce7492091f8e6866d8a810c1828800d787f46266817ee4f0dfe56b008b7412"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -830,6 +839,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bytes",
+ "chunked-bytes",
  "clap",
  "quaternion",
  "quick-xml",
