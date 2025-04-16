@@ -15,7 +15,7 @@ impl ExampleCounter {
     }
 
     pub async fn subscribe<T: ToString>(&mut self, recorder: &Recorder, name: T) {
-        let stream = recorder.add_stream(name, &["counter"]).await;
+        let stream = recorder.add_stream(name, &["count"]).await;
         let new_task = tokio::spawn(Self::publisher_task(stream));
 
         if let Some(task) = self.task.replace(new_task) {
@@ -26,12 +26,12 @@ impl ExampleCounter {
     #[tracing::instrument(skip(stream))]
     async fn publisher_task(stream: StreamHandle) {
         let mut counter = 0.;
-        let mut clock = interval(Duration::from_millis(100));
+        let mut clock = interval(Duration::from_millis(500));
 
         loop {
+            clock.tick().await;
             stream.add(&[counter]).await;
             counter += 1.;
-            clock.tick().await;
         }
     }
 }

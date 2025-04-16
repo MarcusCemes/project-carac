@@ -1,9 +1,12 @@
 #![allow(dead_code)]
 
-use std::{io, time::Duration};
+use std::{io, sync::Arc, time::Duration};
 
-use hardware::{load_cell::LoadCell, motion_capture::MotionCapture};
-use tokio::time::sleep;
+use bincode::config;
+use hardware::{
+    example_counter::ExampleCounter, load_cell::LoadCell, motion_capture::MotionCapture,
+};
+use tokio::{task::JoinSet, time::sleep};
 
 use crate::{
     defs::*,
@@ -11,12 +14,133 @@ use crate::{
         robot_arm::{Motion, MotionConfig, RobotArm},
         wind_shape::WindShape,
     },
-    recorder::Recorder,
+    misc::plot_juggler::PlotJugglerBroadcaster,
+    recorder::{Recorder, Recording},
 };
 
+mod data;
 mod defs;
 mod hardware;
+mod misc;
 mod recorder;
+
+pub async fn convert(divisions: u32) -> io::Result<()> {
+    let recording: Recording = bincode::decode_from_std_read(&mut io::stdin(), binary_config())
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Failed to decode recording from stdin",
+            )
+        })?;
+
+    let segmented_recording = recording
+        .segment(divisions)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Failed to segment recording"))?;
+
+    let mut w = csv::Writer::from_writer(io::stdout());
+
+    let header = segmented_recording
+        .streams()
+        .iter()
+        .map(|&i| &recording.streams[i as usize])
+        .flat_map(|stream| {
+            stream
+                .channels
+                .iter()
+                .map(|c| format!("{}/{}", stream.name, c))
+        })
+        .collect::<Vec<_>>();
+
+    w.write_record(&header)?;
+
+    for values in segmented_recording {
+        let record = values.iter().map(|v| v.to_string());
+        w.write_record(record)?;
+    }
+
+    Ok(())
+}
+
+pub async fn plot_juggler_demo() -> io::Result<()> {
+    let plot = Arc::new(PlotJugglerBroadcaster::new(None));
+
+    let streams = Arc::new([
+        recorder::Stream {
+            name: "counter0".to_string(),
+            channels: vec!["count".to_string()],
+        },
+        recorder::Stream {
+            name: "counter1".to_string(),
+            channels: vec!["count".to_string()],
+        },
+    ]);
+
+    let mut set = JoinSet::new();
+
+    for stream_id in 0..streams.len() {
+        let plot = plot.clone();
+        let streams = streams.clone();
+
+        set.spawn(async move {
+            let stream_id_f32 = stream_id as f32 + 1.;
+
+            sleep_s(0.5 * stream_id_f32).await;
+
+            for time in 0..1000 {
+                let t = 2e-2 * stream_id_f32 * time as f32 + stream_id_f32;
+                let v = t.sin() / stream_id_f32;
+
+                plot.send(
+                    &recorder::Measurement {
+                        data: &[v],
+                        sample: &recorder::Sample {
+                            data_index: 0,
+                            stream_id: stream_id as u8,
+                            time,
+                        },
+                    },
+                    &*streams,
+                );
+
+                sleep_s(1e-4).await;
+            }
+        });
+    }
+
+    set.join_all().await;
+
+    Ok(())
+}
+
+pub async fn counter() -> io::Result<()> {
+    let recorder = Recorder::new();
+
+    let mut mock0 = ExampleCounter::new();
+    mock0.subscribe(&recorder, "counter0").await;
+
+    let mut mock1 = ExampleCounter::new();
+    mock1.subscribe(&recorder, "counter1").await;
+
+    recorder.add_stream("null", &["null0", "null1"]).await;
+
+    tracing::info!("Starting recording...");
+    recorder.new_recording().await;
+    recorder.start_recording();
+
+    sleep_s(1.2).await;
+
+    recorder.stop_recording();
+
+    let recording = recorder.commit().await;
+
+    tracing::info!("Streams: {:?}", recording.streams);
+    tracing::info!("Samples: {:?}", recording.samples);
+    tracing::info!("Data: {:?}", recording.sample_data);
+
+    bincode::encode_into_std_write(recording, &mut io::stdout(), binary_config()).unwrap();
+
+    Ok(())
+}
 
 pub async fn run() -> io::Result<()> {
     let ctx = Context::create().await;
@@ -30,21 +154,16 @@ pub async fn run() -> io::Result<()> {
 
     tracing::info!("Starting recording...");
     recorder.new_recording().await;
-    recorder.start_recording().await;
+    recorder.start_recording();
 
-    sleep_s(1.).await;
+    sleep_s(1.2).await;
 
-    recorder.stop_recording().await;
+    recorder.stop_recording();
     ctx.load_cell.stop_streaming().await?;
 
     let recording = recorder.commit().await;
 
-    for measurement in recording.iter() {
-        println!(
-            "> {} {}: {:.02?}",
-            measurement.sample.time, measurement.sample.stream_id, measurement.data
-        );
-    }
+    bincode::encode_into_std_write(recording, &mut io::stdout(), binary_config()).unwrap();
 
     Ok(())
 }
@@ -193,4 +312,10 @@ pub async fn test_wind_shape() {
 
 async fn sleep_s(seconds: f32) {
     sleep(Duration::from_secs_f32(seconds)).await;
+}
+
+fn binary_config() -> impl config::Config {
+    config::standard()
+        .with_little_endian()
+        .with_fixed_int_encoding()
 }

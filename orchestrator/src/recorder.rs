@@ -1,29 +1,40 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
+use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
 use chunked_bytes::ChunkedBytes;
 use tokio::{sync::Mutex, time::Instant};
 
+use crate::data::SegmentedRecordingIterator;
+
 #[derive(Default)]
 pub struct Recorder {
-    inner: Arc<Mutex<RecorderInner>>,
+    inner: Arc<RecorderInner>,
 }
 
+#[derive(Default)]
 struct RecorderInner {
+    recording: AtomicBool,
+    shared: Mutex<RecorderShared>,
+}
+
+struct RecorderShared {
     buffer: RecordingBuffer,
-    recording: bool,
     ref_time: Instant,
     streams: Vec<Stream>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Decode, Encode)]
 pub struct Stream {
-    channels: Box<[String]>,
-    name: String,
+    pub name: String,
+    pub channels: Vec<String>,
 }
 
 pub struct StreamHandle {
-    recorder: Arc<Mutex<RecorderInner>>,
+    recorder: Arc<RecorderInner>,
     stream_id: u8,
 }
 
@@ -37,23 +48,19 @@ impl Recorder {
         T: ToString,
         U: ToString,
     {
-        let mut inner = self.inner.lock().await;
+        let mut lock = self.inner.shared.lock().await;
 
-        if inner.streams.len() >= u8::MAX as usize {
+        if lock.streams.len() >= u8::MAX as usize {
             panic!("Maximum number of streams reached");
         }
 
         let stream = Stream {
             name: name.to_string(),
-            channels: channels
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
+            channels: channels.iter().map(ToString::to_string).collect(),
         };
 
-        let stream_id = inner.streams.len() as u8;
-        inner.streams.push(stream.clone());
+        let stream_id = lock.streams.len() as u8;
+        lock.streams.push(stream.clone());
 
         let recorder = self.inner.clone();
 
@@ -63,34 +70,34 @@ impl Recorder {
         }
     }
 
-    pub async fn start_recording(&self) {
-        self.inner.lock().await.recording = true;
+    pub fn start_recording(&self) {
+        self.inner.recording.store(true, Ordering::SeqCst);
     }
 
-    pub async fn stop_recording(&self) {
-        self.inner.lock().await.recording = false;
+    pub fn stop_recording(&self) {
+        self.inner.recording.store(false, Ordering::SeqCst);
     }
 
     pub async fn commit(&self) -> Recording {
-        let mut lock = self.inner.lock().await;
+        let mut lock = self.inner.shared.lock().await;
         let streams = lock.streams.clone();
         lock.buffer.commit(streams)
     }
 
     pub async fn new_recording(&self) {
-        self.inner.lock().await.buffer = RecordingBuffer::new();
+        self.inner.shared.lock().await.buffer = RecordingBuffer::new();
     }
 
     pub async fn reset_reference_time(&self) {
-        self.inner.lock().await.ref_time = Instant::now();
+        self.inner.shared.lock().await.ref_time = Instant::now();
     }
 
     pub async fn streams(&self) -> Vec<Stream> {
-        self.inner.lock().await.streams.clone()
+        self.inner.shared.lock().await.streams.clone()
     }
 }
 
-impl RecorderInner {
+impl RecorderShared {
     fn elapsed_micros(&self) -> u32 {
         self.ref_time
             .elapsed()
@@ -100,30 +107,31 @@ impl RecorderInner {
     }
 }
 
-impl Default for RecorderInner {
+impl Default for RecorderShared {
     fn default() -> Self {
         Self {
-            buffer: RecordingBuffer::new(),
-            recording: false,
+            buffer: Default::default(),
             ref_time: Instant::now(),
-            streams: Vec::new(),
+            streams: Default::default(),
         }
     }
 }
 
 impl StreamHandle {
     pub async fn add(&self, channels: &[f32]) {
-        let mut lock = self.recorder.lock().await;
+        if !self.recorder.recording.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let mut lock = self.recorder.shared.lock().await;
 
         debug_assert_eq!(
             channels.len(),
             lock.streams[self.stream_id as usize].channels.len()
         );
 
-        if lock.recording {
-            let time = lock.elapsed_micros();
-            lock.buffer.add(time, self.stream_id, channels);
-        }
+        let time = lock.elapsed_micros();
+        lock.buffer.add(time, self.stream_id, channels);
     }
 }
 
@@ -186,13 +194,14 @@ impl RecordingBuffer {
 
 /* == Recording == */
 
+#[derive(Decode, Encode)]
 pub struct Recording {
-    samples: Vec<Sample>,
-    sample_data: Vec<f32>,
-    streams: Vec<Stream>,
+    pub streams: Vec<Stream>,
+    pub samples: Vec<Sample>,
+    pub sample_data: Vec<f32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Decode, Encode)]
 pub struct Sample {
     pub time: u32,
     pub stream_id: u8,
@@ -206,15 +215,32 @@ pub struct Measurement<'a> {
 }
 
 impl Recording {
-    pub fn iter(&self) -> impl Iterator<Item = Measurement<'_>> + '_ {
-        self.samples.iter().map(move |sample| {
-            let data = &self.sample_data[sample.data_index..];
-            let stream = &self.streams[sample.stream_id as usize];
-            let date_index_end = sample.data_index + stream.channels.len();
-            let data = &data[sample.data_index..date_index_end];
+    pub fn get_at(&self, index: usize) -> Measurement<'_> {
+        self.measurement(&self.samples[index])
+    }
 
-            Measurement { data, sample }
-        })
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Measurement<'_>> + '_ {
+        self.samples.iter().map(move |s| Self::measurement(self, s))
+    }
+
+    pub fn iter_stream(&self, stream_id: u8) -> impl Iterator<Item = Measurement<'_>> + '_ {
+        self.iter().filter(move |s| s.sample.stream_id == stream_id)
+    }
+
+    pub fn n_channels(&self) -> usize {
+        self.streams.iter().map(|s| s.channels.len()).sum()
+    }
+
+    pub fn segment(&self, divisions: u32) -> Option<SegmentedRecordingIterator<'_>> {
+        SegmentedRecordingIterator::new(self, divisions)
+    }
+
+    fn measurement<'a>(&'a self, sample: &'a Sample) -> Measurement<'a> {
+        let stream = &self.streams[sample.stream_id as usize];
+        let date_index_end = sample.data_index + stream.channels.len();
+        let data = &self.sample_data[sample.data_index..date_index_end];
+
+        Measurement { data, sample }
     }
 
     pub fn sort(&mut self) {
