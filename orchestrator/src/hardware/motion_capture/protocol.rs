@@ -323,26 +323,17 @@ fn skip_device_description<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
 pub fn parse_frame_data<B: Buf>(mut buf: B) -> Result<DataFrame, ParseError> {
     let buf = &mut buf;
     let frame_number = buf.try_get_u32_le()?;
-    tracing::debug!("Frame number: {}", frame_number);
 
-    tracing::debug!("Reading markersets");
     skip_markersets(buf)?;
-    tracing::debug!("Reading legacy markers");
     skip_legacy_markers(buf)?;
 
-    tracing::debug!("Reading rigid bodies");
     let rigid_bodies = parse_rigid_body_data(buf)?;
 
-    tracing::debug!("Reading skeletons");
     skip_skeleton_data(buf)?;
-    tracing::debug!("Reading labelled markers");
     skip_labelled_markers(buf)?;
-    tracing::debug!("Reading force plates");
     skip_force_plates(buf)?;
-    tracing::debug!("Reading device data");
     skip_device_data(buf)?;
 
-    tracing::debug!("Reading frame suffix");
     let suffix = parse_frame_suffix(buf).ok();
 
     Ok(DataFrame {
@@ -354,7 +345,6 @@ pub fn parse_frame_data<B: Buf>(mut buf: B) -> Result<DataFrame, ParseError> {
 
 fn skip_markersets<B: Buf>(buf: &mut B) -> Result<(), ParseError> {
     let count = buf.try_get_u32_le()?;
-    tracing::debug!("Skipping {} markersets", count);
 
     for _ in 0..count {
         let _name = try_read_string(buf)?;

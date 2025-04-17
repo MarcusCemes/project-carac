@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-use std::{io, sync::Arc, time::Duration};
+use std::{io, net::IpAddr, sync::Arc, time::Duration};
 
-use bincode::config;
+use config::Config;
 use hardware::{
     example_counter::ExampleCounter, load_cell::LoadCell, motion_capture::MotionCapture,
 };
-use tokio::{task::JoinSet, time::sleep};
+use tokio::{fs, task::JoinSet, time::sleep};
 
 use crate::{
     defs::*,
@@ -18,6 +18,7 @@ use crate::{
     recorder::{Recorder, Recording},
 };
 
+mod config;
 mod data;
 mod defs;
 mod hardware;
@@ -123,15 +124,15 @@ pub async fn counter() -> io::Result<()> {
 
     recorder.add_stream("null", &["null0", "null1"]).await;
 
-    tracing::info!("Starting recording...");
-    recorder.new_recording().await;
+    recorder.clear_buffer().await;
+    recorder.reset_reference_time().await;
     recorder.start_recording();
 
     sleep_s(1.2).await;
 
     recorder.stop_recording();
 
-    let recording = recorder.commit().await;
+    let recording = recorder.finalise().await;
 
     tracing::info!("Streams: {:?}", recording.streams);
     tracing::info!("Samples: {:?}", recording.samples);
@@ -143,25 +144,43 @@ pub async fn counter() -> io::Result<()> {
 }
 
 pub async fn run() -> io::Result<()> {
-    let ctx = Context::create().await;
+    let config = fs::read("config.yaml").await?;
+
+    let config: Config = serde_yaml::from_slice(&config).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to parse config: {e}"),
+        )
+    })?;
+
+    let ctx = Context::create(&config).await;
     let recorder = Recorder::new();
 
-    ctx.motion_capture.subscribe("Tapper", &recorder).await;
-    ctx.load_cell.subscribe(&recorder).await;
+    if let Some((mc, cfg)) = &ctx.motion_capture.zip(config.motion_capture) {
+        for rb in &cfg.rigid_bodies {
+            mc.subscribe(rb, &recorder).await;
+        }
+    }
 
-    ctx.load_cell.set_bias().await?;
-    ctx.load_cell.start_streaming().await?;
+    if let Some(lc) = &ctx.load_cell {
+        lc.subscribe(&recorder).await;
+        lc.set_bias().await?;
+        lc.start_streaming().await?;
+    }
 
-    tracing::info!("Starting recording...");
-    recorder.new_recording().await;
+    recorder.clear_buffer().await;
+    recorder.reset_reference_time().await;
     recorder.start_recording();
 
-    sleep_s(1.2).await;
+    sleep_s(2.).await;
 
     recorder.stop_recording();
-    ctx.load_cell.stop_streaming().await?;
 
-    let recording = recorder.commit().await;
+    if let Some(lc) = &ctx.load_cell {
+        lc.stop_streaming().await?;
+    }
+
+    let recording = recorder.finalise().await;
 
     bincode::encode_into_std_write(recording, &mut io::stdout(), binary_config()).unwrap();
 
@@ -169,34 +188,58 @@ pub async fn run() -> io::Result<()> {
 }
 
 struct Context {
-    motion_capture: MotionCapture,
-    load_cell: LoadCell,
-    wind_shape: WindShape,
+    motion_capture: Option<MotionCapture>,
+    load_cell: Option<LoadCell>,
+    wind_shape: Option<WindShape>,
+    robot_arm: Option<RobotArm>,
 }
 
 impl Context {
-    async fn create() -> Self {
+    async fn create(config: &Config) -> Self {
         Context {
-            motion_capture: MotionCapture::connect(None)
-                .await
-                .expect("Failed to connect to motion capture"),
+            motion_capture: match &config.motion_capture {
+                Some(cfg) => Some(
+                    MotionCapture::connect(cfg.ip, cfg.multicast_ip)
+                        .await
+                        .expect("Failed to connect to motion capture"),
+                ),
+                None => None,
+            },
 
-            load_cell: LoadCell::connect(None)
-                .await
-                .expect("Failed to connect to load cell"),
+            load_cell: match &config.load_cell {
+                Some(cfg) => Some(
+                    LoadCell::connect(cfg.ip)
+                        .await
+                        .expect("Failed to connect to load cell"),
+                ),
+                None => None,
+            },
 
-            wind_shape: WindShape::connect(None)
-                .await
-                .expect("Failed to connect to WindShape"),
+            robot_arm: match &config.robot_arm {
+                Some(cfg) => Some(
+                    RobotArm::connect(cfg.ip, cfg.port, None)
+                        .await
+                        .expect("Failed to connect to robot arm"),
+                ),
+                None => None,
+            },
+
+            wind_shape: match &config.wind_shape {
+                Some(wind_shape) => Some(
+                    WindShape::connect(wind_shape.ip)
+                        .await
+                        .expect("Failed to connect to wind shape"),
+                ),
+                None => None,
+            },
         }
     }
 }
 
-#[allow(dead_code)]
-pub async fn test_robot_arm() {
+pub async fn test_robot_arm(ip: IpAddr, port: u16) {
     tracing::info!("Connecting to robot arm");
 
-    let mut robot_arm = RobotArm::connect(None, None, None)
+    let mut robot_arm = RobotArm::connect(ip, port, None)
         .await
         .expect("Failed to connect to RobotArm");
 
@@ -284,8 +327,8 @@ pub async fn test_robot_arm() {
 }
 
 #[allow(dead_code)]
-pub async fn test_wind_shape() {
-    let mut wind_shape = WindShape::connect(None)
+pub async fn test_wind_shape(ip: IpAddr) {
+    let mut wind_shape = WindShape::connect(ip)
         .await
         .expect("Failed to connect to WindShape");
 
@@ -314,8 +357,8 @@ async fn sleep_s(seconds: f32) {
     sleep(Duration::from_secs_f32(seconds)).await;
 }
 
-fn binary_config() -> impl config::Config {
-    config::standard()
+fn binary_config() -> impl bincode::config::Config {
+    bincode::config::standard()
         .with_little_endian()
         .with_fixed_int_encoding()
 }

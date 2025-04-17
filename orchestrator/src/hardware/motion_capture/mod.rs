@@ -1,4 +1,8 @@
-use std::{io, net::Ipv4Addr, str::FromStr, sync::Arc};
+use std::{
+    io,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
@@ -7,8 +11,6 @@ use crate::recorder::{Recorder, StreamHandle};
 
 pub mod protocol;
 
-const DEFAULT_IP: &str = "192.168.100.184";
-const DEFAULT_MULTICAST_IP: &str = "239.255.42.99";
 const COMMAND_PORT: u16 = 1510;
 const DATA_PORT: u16 = 1511;
 
@@ -35,10 +37,8 @@ enum TaskError {
 }
 
 impl MotionCapture {
-    pub async fn connect(ip: Option<&str>) -> io::Result<MotionCapture> {
+    pub async fn connect(ip: IpAddr, multicast_ip: Ipv4Addr) -> io::Result<MotionCapture> {
         let description = {
-            let ip = ip.unwrap_or(DEFAULT_IP);
-
             let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
             socket.connect((ip, COMMAND_PORT)).await?;
 
@@ -47,8 +47,6 @@ impl MotionCapture {
         };
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DATA_PORT)).await?;
-
-        let multicast_ip = Ipv4Addr::from_str(DEFAULT_MULTICAST_IP).unwrap();
         socket.join_multicast_v4(multicast_ip, Ipv4Addr::UNSPECIFIED)?;
 
         let inner = Arc::new(MotionCaptureInner {

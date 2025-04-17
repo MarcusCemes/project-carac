@@ -1,4 +1,10 @@
-use std::{iter::repeat, net::SocketAddr, str, sync::Arc, time::Duration};
+use std::{
+    iter::repeat,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    str,
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::{
     io,
@@ -8,8 +14,6 @@ use tokio::{
     task::JoinSet,
     time::{interval, timeout},
 };
-
-const DEFAULT_IP: &str = "192.168.88.40";
 
 const MODULE_COUNT: usize = 56;
 const MODULE_FANS: usize = 18;
@@ -69,8 +73,7 @@ enum ResponsePayload {
 }
 
 impl WindShape {
-    pub async fn connect(ip: Option<&str>) -> io::Result<WindShape> {
-        let ip = ip.unwrap_or(DEFAULT_IP);
+    pub async fn connect(ip: IpAddr) -> io::Result<WindShape> {
         let link = Link::connect(ip).await;
 
         // Attempt to handshake with the device with a timeout
@@ -210,15 +213,13 @@ impl WindShape {
 }
 
 impl Link {
-    async fn connect(addr: &str) -> Self {
-        let addr = addr.parse().expect("Invalid IP address");
+    async fn connect(addr: IpAddr) -> Self {
         let addr = SocketAddr::new(addr, REMOTE_PORT);
 
-        let socket = UdpSocket::bind(("0.0.0.0", LOCAL_PORT))
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, LOCAL_PORT))
             .await
-            .expect("Failed to bind to port");
-
-        let socket = Arc::new(socket);
+            .unwrap()
+            .into();
 
         Link { addr, socket }
     }

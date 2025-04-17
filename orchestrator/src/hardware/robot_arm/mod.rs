@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 
 use bincode::{config, Decode, Encode};
 use tokio::{
@@ -63,16 +63,13 @@ struct ResponseError;
 
 impl RobotArm {
     pub async fn connect(
-        ip: Option<&str>,
-        port: Option<u16>,
-        record: Option<StreamHandle>,
+        ip: IpAddr,
+        port: u16,
+        stream: Option<StreamHandle>,
     ) -> io::Result<RobotArm> {
-        let ip = ip.unwrap_or(DEFAULT_IP);
-        let port = port.unwrap_or(DEFAULT_PORT);
-
         let (socket_rx, socket) = TcpStream::connect((ip, port)).await?.into_split();
 
-        let (task_handle, ack, moving) = Self::spawn_tasks(socket_rx, record);
+        let (task_handle, ack, moving) = Self::spawn_tasks(socket_rx, stream);
 
         Ok(RobotArm {
             ack,
@@ -169,14 +166,14 @@ impl RobotArm {
 
     fn spawn_tasks(
         socket: OwnedReadHalf,
-        record: Option<StreamHandle>,
+        stream: Option<StreamHandle>,
     ) -> (JoinSet<()>, mpsc::Receiver<()>, watch::Receiver<bool>) {
         let (ack_tx, ack_rx) = mpsc::channel(1);
         let (moving_tx, moving_rx) = watch::channel(false);
 
         let mut set = JoinSet::new();
 
-        set.spawn(Self::receiver_task(ack_tx, moving_tx, socket, record));
+        set.spawn(Self::receiver_task(ack_tx, moving_tx, socket, stream));
 
         (set, ack_rx, moving_rx)
     }

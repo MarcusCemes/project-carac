@@ -5,6 +5,7 @@ use std::sync::{
 
 use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
+use chrono::{DateTime, Utc};
 use chunked_bytes::ChunkedBytes;
 use tokio::{sync::Mutex, time::Instant};
 
@@ -24,6 +25,7 @@ struct RecorderInner {
 struct RecorderShared {
     buffer: RecordingBuffer,
     ref_time: Instant,
+    start_time: DateTime<Utc>,
     streams: Vec<Stream>,
 }
 
@@ -54,8 +56,11 @@ impl Recorder {
             panic!("Maximum number of streams reached");
         }
 
+        let name = name.to_string();
+        tracing::info!("Added stream: {name}");
+
         let stream = Stream {
-            name: name.to_string(),
+            name,
             channels: channels.iter().map(ToString::to_string).collect(),
         };
 
@@ -71,25 +76,36 @@ impl Recorder {
     }
 
     pub fn start_recording(&self) {
+        tracing::debug!("Recording resumed");
         self.inner.recording.store(true, Ordering::SeqCst);
     }
 
     pub fn stop_recording(&self) {
+        tracing::debug!("Recording paused");
         self.inner.recording.store(false, Ordering::SeqCst);
     }
 
-    pub async fn commit(&self) -> Recording {
+    pub async fn finalise(&self) -> Recording {
+        self.stop_recording();
         let mut lock = self.inner.shared.lock().await;
+
         let streams = lock.streams.clone();
-        lock.buffer.commit(streams)
+        let start_time = lock.start_time;
+        let recording = lock.buffer.commit(&start_time, streams);
+
+        tracing::info!("Recording finalised");
+        recording
     }
 
-    pub async fn new_recording(&self) {
+    pub async fn clear_buffer(&self) {
+        tracing::info!("Recording buffer cleared");
         self.inner.shared.lock().await.buffer = RecordingBuffer::new();
     }
 
     pub async fn reset_reference_time(&self) {
+        tracing::info!("Recording reference time reset");
         self.inner.shared.lock().await.ref_time = Instant::now();
+        self.inner.shared.lock().await.start_time = Utc::now();
     }
 
     pub async fn streams(&self) -> Vec<Stream> {
@@ -112,6 +128,7 @@ impl Default for RecorderShared {
         Self {
             buffer: Default::default(),
             ref_time: Instant::now(),
+            start_time: Utc::now(),
             streams: Default::default(),
         }
     }
@@ -119,19 +136,18 @@ impl Default for RecorderShared {
 
 impl StreamHandle {
     pub async fn add(&self, channels: &[f32]) {
-        if !self.recorder.recording.load(Ordering::SeqCst) {
-            return;
+        if self.recorder.recording.load(Ordering::SeqCst) {
+            let mut lock = self.recorder.shared.lock().await;
+
+            // Check that the number of channels matches the stream config
+            debug_assert_eq!(
+                channels.len(),
+                lock.streams[self.stream_id as usize].channels.len()
+            );
+
+            let time = lock.elapsed_micros();
+            lock.buffer.add(time, self.stream_id, channels);
         }
-
-        let mut lock = self.recorder.shared.lock().await;
-
-        debug_assert_eq!(
-            channels.len(),
-            lock.streams[self.stream_id as usize].channels.len()
-        );
-
-        let time = lock.elapsed_micros();
-        lock.buffer.add(time, self.stream_id, channels);
     }
 }
 
@@ -157,7 +173,7 @@ impl RecordingBuffer {
         }
     }
 
-    pub fn commit(&mut self, streams: Vec<Stream>) -> Recording {
+    pub fn commit(&mut self, time: &DateTime<Utc>, streams: Vec<Stream>) -> Recording {
         let mut samples = Vec::new();
         let mut sample_data = Vec::new();
 
@@ -188,6 +204,7 @@ impl RecordingBuffer {
             samples,
             sample_data,
             streams,
+            time: time.to_rfc3339(),
         }
     }
 }
@@ -199,6 +216,7 @@ pub struct Recording {
     pub streams: Vec<Stream>,
     pub samples: Vec<Sample>,
     pub sample_data: Vec<f32>,
+    pub time: String,
 }
 
 #[derive(Debug, Decode, Encode)]

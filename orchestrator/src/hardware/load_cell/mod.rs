@@ -1,4 +1,8 @@
-use std::{io, mem, net::Ipv4Addr, sync::Arc};
+use std::{
+    io, mem,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
 use bincode::{config, error::DecodeError, Decode, Encode};
 use reqwest::get;
@@ -60,8 +64,7 @@ struct XmlConfig {
 }
 
 impl LoadCell {
-    pub async fn connect(ip: Option<&str>) -> Result<Self, Error> {
-        let ip = ip.unwrap_or(DEFAULT_IP);
+    pub async fn connect(ip: IpAddr) -> Result<Self, Error> {
         let counts = Self::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
@@ -94,7 +97,7 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    async fn fetch_config(ip: &str) -> Result<(u32, u32), Error> {
+    async fn fetch_config(ip: IpAddr) -> Result<(u32, u32), Error> {
         let xml_str = get(&format!("http://{ip}/netftcalapi.xml"))
             .await?
             .text()
