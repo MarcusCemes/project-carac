@@ -9,6 +9,7 @@ mod defs;
 mod hardware;
 mod misc;
 mod recording;
+mod train;
 
 pub async fn launch() -> io::Result<()> {
     cli::parse().await
