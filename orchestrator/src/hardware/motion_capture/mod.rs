@@ -7,7 +7,7 @@ use std::{
 use bytes::Bytes;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recorder::{Recorder, StreamHandle};
+use crate::recording::{Recorder, StreamHandle};
 
 pub mod protocol;
 

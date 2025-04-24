@@ -1,9 +1,7 @@
 from asyncio import (
-    DatagramProtocol,
     StreamReader,
     get_event_loop,
     open_connection,
-    sleep,
     wait_for,
 )
 from dataclasses import dataclass

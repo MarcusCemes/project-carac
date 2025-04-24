@@ -9,7 +9,7 @@ use reqwest::get;
 use serde::Deserialize;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recorder::{Recorder, StreamHandle};
+use crate::recording::{Recorder, StreamHandle};
 
 const DEFAULT_IP: &str = "192.168.1.1";
 const PORT: u16 = 49152;

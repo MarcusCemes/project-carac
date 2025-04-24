@@ -12,7 +12,7 @@ use tokio::{
     time::timeout,
 };
 
-use crate::{defs::*, recorder::StreamHandle};
+use crate::{defs::*, recording::StreamHandle};
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_IP: &str = "192.168.100.254";

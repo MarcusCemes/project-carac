@@ -2,52 +2,71 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};
 
+use crate::misc::serde::deserialise_empty_to_default;
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub motion_capture: Option<MotionCapture>,
-    pub load_cell: Option<LoadCell>,
-    pub robot_arm: Option<RobotArm>,
-    pub wind_shape: Option<WindShape>,
-    pub relay: Option<Relay>,
-    pub devices: Option<Vec<Device>>,
+    pub hardware: HardwareConfig,
+
+    // #[serde(default)]
+    pub recording: RecordingConfig,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct HardwareConfig {
+    pub load_cell: Option<LoadCellConfig>,
+    pub motion_capture: Option<MotionCaptureConfig>,
+    pub robot_arm: Option<RobotArmConfig>,
+    pub wind_shape: Option<WindShapeConfig>,
+
+    pub extras: Vec<Device>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LoadCell {
+pub struct LoadCellConfig {
     pub ip: IpAddr,
+
     #[serde(default)]
     pub filters: Filters,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MotionCapture {
+pub struct MotionCaptureConfig {
     pub ip: IpAddr,
     #[serde(default = "default_multicast_addr")]
     pub multicast_ip: Ipv4Addr,
+
+    pub reference_body: String,
     pub rigid_bodies: Vec<String>,
+
     #[serde(default)]
     pub filters: Filters,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RobotArm {
+pub struct RobotArmConfig {
     pub ip: IpAddr,
     pub port: u16,
+
     #[serde(default)]
     pub filters: Filters,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct WindShape {
+pub struct WindShapeConfig {
     pub ip: IpAddr,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct Relay {
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecordingConfig {
+    pub save_path: Option<String>,
+    #[serde(deserialize_with = "deserialise_empty_to_default")]
     pub plot_juggler: Option<PlotJuggler>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PlotJuggler {
     pub ip: IpAddr,
     pub port: u16,
@@ -73,20 +92,13 @@ pub enum Filter {
     Butterworth { cutoff: f32, order: u32 },
 }
 
+/* == Default implementations == */
+
 impl Default for PlotJuggler {
     fn default() -> Self {
         PlotJuggler {
             ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 9870,
-        }
-    }
-}
-
-impl Default for Filter {
-    fn default() -> Self {
-        Filter::Butterworth {
-            cutoff: 0.,
-            order: 0,
         }
     }
 }

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::{task::JoinHandle, time::interval};
 
-use crate::recorder::{Recorder, StreamHandle};
+use crate::recording::{Recorder, StreamHandle};
 
 #[derive(Default)]
 pub struct ExampleCounter {

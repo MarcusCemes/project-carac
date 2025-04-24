@@ -5,7 +5,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::recorder::{Measurement, Stream};
+use crate::recording::RecordedSample;
 
 const DEFAULT_IP: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 9870;
@@ -29,19 +29,16 @@ impl PlotJugglerBroadcaster {
         PlotJugglerBroadcaster { addr, socket }
     }
 
-    pub fn send(&self, measurement: &Measurement, streams: &[Stream]) {
-        let stream = &streams[measurement.sample.stream_id as usize];
+    pub fn send(&self, sample: &RecordedSample) {
+        let ts = sample.timestamp_s();
 
-        let message = Message {
-            ts: 1e-6 * measurement.sample.time as f32,
+        let fields = sample
+            .definition
+            .qualified_channel_names()
+            .zip(sample.channel_data.iter().copied())
+            .collect();
 
-            fields: stream
-                .channels
-                .iter()
-                .zip(&measurement.data[measurement.sample.data_index..])
-                .map(|(c, &d)| (format!("{}/{}", stream.name, c), d))
-                .collect(),
-        };
+        let message = Message { ts, fields };
 
         let buffer = serde_json::to_vec(&message).expect("Failed to serialize message");
 
