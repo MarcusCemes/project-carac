@@ -7,19 +7,16 @@ use crate::misc::serde::deserialise_empty_to_default;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub hardware: HardwareConfig,
-
-    // #[serde(default)]
     pub recording: RecordingConfig,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct HardwareConfig {
+    pub additional_devices: Vec<Device>,
     pub load_cell: Option<LoadCellConfig>,
     pub motion_capture: Option<MotionCaptureConfig>,
     pub robot_arm: Option<RobotArmConfig>,
     pub wind_shape: Option<WindShapeConfig>,
-
-    pub extras: Vec<Device>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,8 +33,10 @@ pub struct MotionCaptureConfig {
     #[serde(default = "default_multicast_addr")]
     pub multicast_ip: Ipv4Addr,
 
-    pub reference_body: String,
     pub rigid_bodies: Vec<String>,
+
+    #[serde(default)]
+    pub consider_as_skeleton: bool,
 
     #[serde(default)]
     pub filters: Filters,
@@ -77,8 +76,11 @@ pub struct Device {
     pub name: String,
     pub ip: IpAddr,
     pub port: u16,
+
     #[serde(default)]
     pub channels: Vec<String>,
+    pub transmit_rate: u16,
+
     #[serde(default)]
     pub filters: Filters,
 }

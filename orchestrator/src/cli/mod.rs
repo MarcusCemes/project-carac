@@ -7,6 +7,7 @@ mod convert;
 mod examples;
 mod run;
 mod test;
+mod view;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -28,8 +29,14 @@ enum Command {
     },
 
     Counter,
+
     PlotJugglerDemo,
-    Run,
+
+    Run {
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
+    },
+
     Test {
         #[arg(long)]
         robot_ip: IpAddr,
@@ -38,6 +45,8 @@ enum Command {
         #[arg(long)]
         windshape_ip: IpAddr,
     },
+
+    View,
 }
 
 #[derive(Subcommand)]
@@ -56,12 +65,14 @@ pub async fn parse() -> io::Result<()> {
         Command::Convert { divisions } => self::convert::segment(divisions).await,
         Command::Counter => self::examples::counter().await,
         Command::PlotJugglerDemo => self::examples::plot_juggler().await,
-        Command::Run => self::run::launch().await,
+        Command::Run { config } => self::run::launch(&config).await,
 
         Command::Test {
             robot_ip,
             robot_port,
             windshape_ip,
         } => self::test::run(robot_ip, robot_port, windshape_ip).await,
+
+        Command::View => self::view::display_data(),
     }
 }

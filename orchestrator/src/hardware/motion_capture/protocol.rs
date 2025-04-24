@@ -41,11 +41,11 @@ impl From<TryGetError> for ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::IoError(e) => write!(f, "IO Error: {}", e),
+            ParseError::IoError(e) => write!(f, "IO Error: {e}"),
             ParseError::UnexpectedEof => write!(f, "Unexpected end of buffer"),
-            ParseError::InvalidString(e) => write!(f, "Invalid UTF-8 string: {}", e),
-            ParseError::UnknownDescriptionType(t) => write!(f, "Unknown description type: {}", t),
-            ParseError::Other(s) => write!(f, "Parse Error: {}", s),
+            ParseError::InvalidString(e) => write!(f, "Invalid UTF-8 string: {e}"),
+            ParseError::UnknownDescriptionType(t) => write!(f, "Unknown description type: {t}"),
+            ParseError::Other(s) => write!(f, "Parse Error: {s}"),
         }
     }
 }

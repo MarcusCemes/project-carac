@@ -17,33 +17,24 @@ pub async fn counter() -> io::Result<()> {
     let mut mock1 = ExampleCounter::new();
     mock1.subscribe(&recorder, "counter1").await;
 
-    recorder.add_stream("null", &["null0", "null1"]).await;
+    let null_handle = recorder.add_stream("null", &["null0", "null1"]).await;
 
     recorder.clear_buffer().await;
     recorder.reset_reference_time().await;
+
+    // This will not get recorded
+    null_handle.add(&[0., f32::NAN]).await;
+
     recorder.start_recording();
+
+    // This will get recorded
+    null_handle.add(&[1., f32::NAN]).await;
 
     sleep(Duration::from_secs_f32(1.2)).await;
 
     recorder.stop_recording();
 
     let recording = recorder.complete().await;
-    eprintln!("\nRecording data:\n");
-
-    for stream in &recording.recorded_streams {
-        eprintln!("  Stream {}", stream.definition.name);
-
-        for sample in stream.iter_samples() {
-            eprintln!(
-                "    {:.03}: {:+.03?}",
-                sample.timestamp_s(),
-                sample.channel_data
-            )
-        }
-
-        eprintln!();
-    }
-
     recording.encode(&mut io::stdout())?;
 
     Ok(())

@@ -1,5 +1,5 @@
 use std::{
-    iter::repeat,
+    iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str,
     sync::Arc,
@@ -226,7 +226,7 @@ impl Link {
 
     async fn send_request(&self, request: Request, client_id: u8) -> io::Result<()> {
         let (tag, payload) = request.pack();
-        let message = format!("{}@{}:{}\0", tag, client_id, payload);
+        let message = format!("{tag}@{client_id}:{payload}\0");
 
         self.socket.send_to(message.as_bytes(), self.addr).await?;
 
@@ -264,8 +264,7 @@ impl Request {
                 let fan_speed = (*fan_speed).min(100).to_string();
                 let enable_power = *enable_power as u8;
 
-                let fan_power_str = repeat(fan_speed)
-                    .take(MODULE_FANS)
+                let fan_power_str = iter::repeat_n(fan_speed, MODULE_FANS)
                     .collect::<Vec<_>>()
                     .join(",");
 

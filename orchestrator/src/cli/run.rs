@@ -11,15 +11,17 @@ use crate::{
     recording::Recorder,
 };
 
-pub async fn launch() -> io::Result<()> {
-    let file = fs::read("config.yaml").await?;
+pub async fn launch(config_path: &str) -> io::Result<()> {
+    let config: Config = {
+        let data = fs::read(config_path).await?;
 
-    let config: Config = serde_yaml::from_slice(&file).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Failed to parse config: {e}"),
-        )
-    })?;
+        serde_yaml::from_slice(&data).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse config: {e}"),
+            )
+        })?
+    };
 
     let ctx = Context::create(&config).await;
     let recorder = Recorder::new();

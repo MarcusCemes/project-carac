@@ -25,6 +25,7 @@ pub struct LoadCell {
 }
 
 struct LoadCellInner {
+    config: LoadCellConfig,
     link: Link,
     stream: Mutex<Option<StreamHandle>>,
 }
@@ -52,30 +53,40 @@ struct Command {
 }
 
 #[derive(Deserialize)]
-struct XmlConfig {
+struct LoadCellConfig {
     #[serde(rename = "scalfu")]
     force_unit: String,
     #[serde(rename = "scaltu")]
     torque_unit: String,
     #[serde(rename = "calcpf")]
-    force_counts: u32,
+    force_counts: f32,
     #[serde(rename = "calcpt")]
-    torque_counts: u32,
+    torque_counts: f32,
+
+    #[serde(rename = "comrdtbsiz")]
+    buffer_size: u8,
+    #[serde(rename = "setuserfilter")]
+    low_pass_frequency: u8,
+    #[serde(rename = "comrdtrate")]
+    output_rate: u32,
+    #[serde(rename = "runrate")]
+    internal_rate: u32,
 }
 
 impl LoadCell {
     pub async fn connect(ip: IpAddr) -> Result<Self, Error> {
-        let counts = Self::fetch_config(ip).await?;
+        let config = Self::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
         socket.connect((ip, PORT)).await?;
 
         let inner = Arc::new(LoadCellInner {
+            config,
             link: Link(socket),
-            stream: Default::default(),
+            stream: Mutex::new(None),
         });
 
-        let task = tokio::spawn(Self::receiver_task(inner.clone(), counts));
+        let task = tokio::spawn(Self::load_cell_task(inner.clone()));
 
         Ok(LoadCell { inner, task })
     }
@@ -97,14 +108,14 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    async fn fetch_config(ip: IpAddr) -> Result<(u32, u32), Error> {
+    async fn fetch_config(ip: IpAddr) -> Result<LoadCellConfig, Error> {
         let xml_str = get(&format!("http://{ip}/netftcalapi.xml"))
             .await?
             .text()
             .await?;
 
         // Deserialize with serde and quick_xml
-        let config: XmlConfig = quick_xml::de::from_str(&xml_str)
+        let config: LoadCellConfig = quick_xml::de::from_str(&xml_str)
             .map_err(|_| Error::MalformedConfig("Failed to parse XML config".to_string()))?;
 
         if config.force_unit != "N" {
@@ -115,14 +126,12 @@ impl LoadCell {
             tracing::warn!("Torque unit is not Nm: {}", config.torque_unit);
         }
 
-        Ok((config.force_counts, config.torque_counts))
+        Ok(config)
     }
 
     #[tracing::instrument(skip(inner))]
-    async fn receiver_task(inner: Arc<LoadCellInner>, counts: (u32, u32)) -> Result<(), TaskError> {
+    async fn load_cell_task(inner: Arc<LoadCellInner>) -> Result<(), TaskError> {
         tracing::debug!("Receiver started");
-
-        let (force_counts, torque_counts) = (counts.0 as f32, counts.1 as f32);
 
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
@@ -135,16 +144,10 @@ impl LoadCell {
                 if let Some(ref stream) = *lock {
                     let msg = parse_message(&buf)?;
 
-                    let payload = [
-                        msg.fx as f32 / force_counts,
-                        msg.fy as f32 / force_counts,
-                        msg.fz as f32 / force_counts,
-                        msg.tx as f32 / torque_counts,
-                        msg.ty as f32 / torque_counts,
-                        msg.tz as f32 / torque_counts,
-                    ];
+                    let channels =
+                        msg.channels(inner.config.force_counts, inner.config.torque_counts);
 
-                    stream.add(&payload).await;
+                    stream.add(&channels).await;
                 }
             }
 
@@ -208,6 +211,19 @@ struct Message {
     tx: i32,
     ty: i32,
     tz: i32,
+}
+
+impl Message {
+    fn channels(&self, force_counts: f32, torque_counts: f32) -> [f32; 6] {
+        [
+            self.fx as f32 / force_counts,
+            self.fy as f32 / force_counts,
+            self.fz as f32 / force_counts,
+            self.tx as f32 / torque_counts,
+            self.ty as f32 / torque_counts,
+            self.tz as f32 / torque_counts,
+        ]
+    }
 }
 
 fn parse_message(buf: &[u8]) -> Result<Message, DecodeError> {
