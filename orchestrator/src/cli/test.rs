@@ -1,27 +1,31 @@
-use std::{io, net::IpAddr, time::Duration};
+use std::{net::IpAddr, time::Duration};
+
+use eyre::{Context, Result};
 
 use crate::{
     defs::Point,
     hardware::{
-        robot_arm::{Motion, MotionConfig, RobotArm},
+        robot_arm::{Motion, MotionType, RobotArm, SpeedProfile},
         wind_shape::WindShape,
     },
 };
 
-pub async fn run(robot_ip: IpAddr, robot_port: u16, windshape_ip: IpAddr) -> io::Result<()> {
-    test_robot_arm(robot_ip, robot_port).await;
+pub async fn run(robot_ip: IpAddr, robot_port: u16, windshape_ip: IpAddr) -> Result<()> {
+    test_robot_arm(robot_ip, robot_port).await?;
     test_wind_shape(windshape_ip).await;
     Ok(())
 }
 
-async fn test_robot_arm(ip: IpAddr, port: u16) {
+async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
     tracing::info!("Connecting to robot arm");
 
-    let mut robot_arm = RobotArm::connect(ip, port, None)
+    let robot_arm = RobotArm::connect(ip, port)
         .await
-        .expect("Failed to connect to RobotArm");
+        .wrap_err("Failed to connect to RobotArm")?;
 
-    let mut position = Point {
+    let mut r = robot_arm.controller();
+
+    let mut p = Point {
         x: 500.,
         y: 100.,
         z: 400.,
@@ -36,72 +40,74 @@ async fn test_robot_arm(ip: IpAddr, port: u16) {
         ..Default::default()
     };
 
-    let mut config = MotionConfig {
-        rotation: 10000.,
-        translation: 10000.,
+    let mut profile = SpeedProfile {
+        rotation_limit: 10000.,
+        translation_limit: 10000.,
         acceleration_scale: 20,
         deceleration_scale: 20,
-        speed_scale: 100,
+        velocity_scale: 100,
     };
 
-    robot_arm.set_offset(&offset).await;
-    robot_arm.set_config(&config).await;
+    r.set_offset(&offset).await?;
+    r.set_profile(&profile).await?;
 
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    position.x = 1200.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.x = 1200.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
     offset.z = 100.;
-    config.acceleration_scale = 100;
-    config.deceleration_scale = 100;
+    profile.acceleration_scale = 100;
+    profile.deceleration_scale = 100;
 
-    robot_arm.set_offset(&offset).await;
-    robot_arm.set_config(&config).await;
+    r.set_offset(&offset).await?;
+    r.set_profile(&profile).await?;
 
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    position.rx = 90.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.rx = 90.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    position.rx = -90.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.rx = -90.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    position.rx = 0.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.rx = 0.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
     offset.z = 0.;
-    robot_arm.set_offset(&offset).await;
+    r.set_offset(&offset).await?;
 
-    position.x = 500.;
-    position.z = 450.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.x = 500.;
+    p.z = 450.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    config.acceleration_scale = 15;
-    config.deceleration_scale = 15;
-    config.rotation = 30.;
-    robot_arm.set_config(&config).await;
+    profile.acceleration_scale = 15;
+    profile.deceleration_scale = 15;
+    profile.rotation_limit = 30.;
+    r.set_profile(&profile).await?;
 
-    position.rz = -45.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.rz = -45.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    position.rz = 20.;
-    robot_arm.move_to(&Motion::Linear(position)).await;
-    robot_arm.wait_motion().await;
+    p.rz = 20.;
+    r.move_to(Motion::Linear(&p)).await?;
+    r.wait_settled().await;
 
-    config.rotation = 10000.;
-    config.translation = 10000.;
+    profile.rotation_limit = 10000.;
+    profile.translation_limit = 10000.;
 
-    robot_arm.return_home().await;
-    robot_arm.wait_motion().await;
+    r.go_home(MotionType::Direct).await?;
+    r.wait_settled().await;
+
+    Ok(())
 }
 
 async fn test_wind_shape(ip: IpAddr) {

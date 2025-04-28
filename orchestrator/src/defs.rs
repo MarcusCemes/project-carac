@@ -19,6 +19,9 @@ impl Pose {
     }
 }
 
+// The required size for a Point or Joint
+pub const POINT_JOINT_SIZE: usize = 6 * std::mem::size_of::<f32>();
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
 pub struct Point {
     pub x: f32,
@@ -40,3 +43,16 @@ impl From<Point> for Pose {
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
 pub struct Joint([f32; 6]);
+
+#[cfg(test)]
+mod tests {
+    use std::mem;
+
+    use super::*;
+
+    #[test]
+    fn motion_size() {
+        assert_eq!(mem::size_of::<Point>(), POINT_JOINT_SIZE);
+        assert_eq!(mem::size_of::<Joint>(), POINT_JOINT_SIZE);
+    }
+}

@@ -1,15 +1,11 @@
 #![allow(dead_code)]
 
-use std::io;
-
-mod cli;
+pub mod cli;
 mod config;
 mod data;
 mod defs;
 mod hardware;
 mod misc;
+mod orchestrator;
 mod recording;
-
-pub async fn launch() -> io::Result<()> {
-    cli::parse().await
-}
+mod server;

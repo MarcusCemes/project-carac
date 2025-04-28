@@ -1,10 +1,11 @@
 use std::{io, mem};
 
 use chrono::DateTime;
+use eyre::Result;
 
 use crate::recording::Recording;
 
-pub fn display_data() -> io::Result<()> {
+pub fn display_data() -> Result<()> {
     let recording = Recording::decode(&mut io::stdin())?;
 
     let start = DateTime::from_timestamp_micros(recording.start_timestamp_us).unwrap();

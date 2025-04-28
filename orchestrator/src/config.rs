@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr};
 
+use eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::misc::serde::deserialise_empty_to_default;
@@ -45,6 +46,7 @@ pub struct MotionCaptureConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RobotArmConfig {
     pub ip: IpAddr,
+    #[serde(default = "default_robot_arm_port")]
     pub port: u16,
 
     #[serde(default)]
@@ -107,4 +109,16 @@ impl Default for PlotJuggler {
 
 const fn default_multicast_addr() -> Ipv4Addr {
     Ipv4Addr::new(239, 255, 42, 99)
+}
+
+const fn default_robot_arm_port() -> u16 {
+    20000
+}
+
+/* == Parsing == */
+
+impl Config {
+    pub fn load(data: &[u8]) -> Result<Self> {
+        serde_yaml::from_slice(data).wrap_err("Failed to parse config")
+    }
 }

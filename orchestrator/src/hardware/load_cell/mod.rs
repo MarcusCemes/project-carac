@@ -5,11 +5,12 @@ use std::{
 };
 
 use bincode::{config, error::DecodeError, Decode, Encode};
+use eyre::{Context, Result};
 use reqwest::get;
 use serde::Deserialize;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recording::{Recorder, StreamHandle};
+use crate::recording::{Sink, StreamWriter};
 
 const DEFAULT_IP: &str = "192.168.1.1";
 const PORT: u16 = 49152;
@@ -19,6 +20,8 @@ const BUFFER_SIZE: usize = 8192; // 8KB
 
 const STREAM_NAME: &str = "load_cell";
 const CHANNELS: [&str; 6] = ["fx", "fy", "fz", "tx", "ty", "tz"];
+
+type Data = [f32; CHANNELS.len()];
 pub struct LoadCell {
     inner: Arc<LoadCellInner>,
     task: JoinHandle<Result<(), TaskError>>,
@@ -27,7 +30,7 @@ pub struct LoadCell {
 struct LoadCellInner {
     config: LoadCellConfig,
     link: Link,
-    stream: Mutex<Option<StreamHandle>>,
+    stream: Mutex<Option<StreamWriter>>,
 }
 
 struct Link(UdpSocket);
@@ -74,7 +77,7 @@ struct LoadCellConfig {
 }
 
 impl LoadCell {
-    pub async fn connect(ip: IpAddr) -> Result<Self, Error> {
+    pub async fn connect(ip: IpAddr) -> Result<Self> {
         let config = Self::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
@@ -91,9 +94,13 @@ impl LoadCell {
         Ok(LoadCell { inner, task })
     }
 
-    pub async fn subscribe(&self, recorder: &Recorder) {
-        let mut lock = self.inner.stream.lock().await;
-        *lock = Some(recorder.add_stream(STREAM_NAME, &CHANNELS).await);
+    pub async fn subscribe(&self, sink: &Sink) -> Result<()> {
+        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let stream = sink.add_stream(STREAM_NAME.to_owned(), channels).await?;
+
+        *self.inner.stream.lock().await = Some(stream);
+
+        Ok(())
     }
 
     pub async fn start_streaming(&self) -> io::Result<()> {
@@ -108,15 +115,15 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    async fn fetch_config(ip: IpAddr) -> Result<LoadCellConfig, Error> {
+    async fn fetch_config(ip: IpAddr) -> Result<LoadCellConfig> {
         let xml_str = get(&format!("http://{ip}/netftcalapi.xml"))
             .await?
             .text()
             .await?;
 
         // Deserialize with serde and quick_xml
-        let config: LoadCellConfig = quick_xml::de::from_str(&xml_str)
-            .map_err(|_| Error::MalformedConfig("Failed to parse XML config".to_string()))?;
+        let config: LoadCellConfig =
+            quick_xml::de::from_str(&xml_str).wrap_err("Failed to parse XML config")?;
 
         if config.force_unit != "N" {
             tracing::warn!("Force unit is not N: {}", config.force_unit);
@@ -138,17 +145,11 @@ impl LoadCell {
         loop {
             inner.link.0.recv_buf(&mut buf).await?;
 
-            {
-                let lock = inner.stream.lock().await;
+            if let Some(ref stream) = *inner.stream.lock().await {
+                let msg = parse_message(&buf)?;
+                let data = msg.data(&inner.config);
 
-                if let Some(ref stream) = *lock {
-                    let msg = parse_message(&buf)?;
-
-                    let channels =
-                        msg.channels(inner.config.force_counts, inner.config.torque_counts);
-
-                    stream.add(&channels).await;
-                }
+                stream.write_now(&data).await;
             }
 
             buf.clear();
@@ -214,15 +215,10 @@ struct Message {
 }
 
 impl Message {
-    fn channels(&self, force_counts: f32, torque_counts: f32) -> [f32; 6] {
-        [
-            self.fx as f32 / force_counts,
-            self.fy as f32 / force_counts,
-            self.fz as f32 / force_counts,
-            self.tx as f32 / torque_counts,
-            self.ty as f32 / torque_counts,
-            self.tz as f32 / torque_counts,
-        ]
+    fn data(&self, config: &LoadCellConfig) -> Data {
+        let [fx, fy, fz] = [self.fx, self.fy, self.fz].map(|x| x as f32 / config.force_counts);
+        let [tx, ty, tz] = [self.tx, self.ty, self.tz].map(|x| x as f32 / config.torque_counts);
+        [fx, fy, fz, tx, ty, tz]
     }
 }
 

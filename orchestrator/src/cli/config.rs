@@ -1,19 +1,12 @@
-use std::io;
-
+use eyre::Result;
 use tokio::fs;
 
 use crate::config::Config;
 
-pub async fn read_and_print(path: &str) -> io::Result<()> {
+pub async fn read_and_print(path: &str) -> Result<()> {
     let config: Config = {
         let data = fs::read(path).await?;
-
-        serde_yaml::from_slice(&data).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to parse config: {e}"),
-            )
-        })?
+        Config::load(&data)?
     };
 
     println!("{config:#?}");

@@ -1,209 +1,160 @@
-use std::{net::IpAddr, time::Duration};
+use std::{io, mem, net::IpAddr, sync::Arc, time::Duration};
 
-use bincode::{config, Decode, Encode};
+use bincode::{Decode, Encode};
+use eyre::{bail, Result};
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpStream,
-    },
-    sync::{mpsc, watch},
-    task::JoinSet,
-    time::timeout,
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf},
+    net::TcpStream,
+    sync::{oneshot, watch, Mutex},
+    task::JoinHandle,
 };
 
-use crate::{defs::*, recording::StreamHandle};
+use crate::{defs::*, recording::StreamWriter};
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(3);
-const DEFAULT_IP: &str = "192.168.100.254";
-const DEFAULT_PORT: u16 = 20000;
 const MAGIC_HEADER: u8 = 0x95;
 
 pub struct RobotArm {
-    ack: mpsc::Receiver<()>,
+    inner: Arc<Inner>,
+    socket: WriteHalf<BufStream<TcpStream>>,
+    task: JoinHandle<Result<()>>,
+}
+
+struct Inner {
     moving: watch::Receiver<bool>,
-    socket: OwnedWriteHalf,
-
-    #[allow(dead_code)]
-    task_handle: JoinSet<()>,
+    shared: Mutex<Shared>,
+    status: watch::Receiver<Option<RobotStatus>>,
 }
 
-#[derive(Copy, Clone, Debug, Encode, Decode)]
-pub struct MotionConfig {
-    pub translation: f32,
-    pub rotation: f32,
-    pub acceleration_scale: u8,
-    pub speed_scale: u8,
-    pub deceleration_scale: u8,
-}
-
-pub enum Motion {
-    Joint(Point),
-    Linear(Point),
-    Pose(Joint),
+#[derive(Default)]
+struct Shared {
+    ack: Option<(u8, oneshot::Sender<()>)>,
+    command_counter: u8,
+    stream: Option<StreamWriter>,
 }
 
 enum Response {
-    Ack,
+    Ack(u8),
     Error(u16),
     MotionComplete,
     PowerOff,
-    Report(Report),
+    Status(RobotStatus),
 }
 
 #[derive(Decode)]
-struct Report {
+struct RobotStatus {
     position: Point,
     pose: Joint,
     error: Joint,
 }
 
-#[derive(Debug)]
-struct ResponseError;
-
 impl RobotArm {
-    pub async fn connect(
-        ip: IpAddr,
-        port: u16,
-        stream: Option<StreamHandle>,
-    ) -> io::Result<RobotArm> {
-        let (socket_rx, socket) = TcpStream::connect((ip, port)).await?.into_split();
+    pub async fn connect(ip: IpAddr, port: u16) -> Result<RobotArm> {
+        let socket = TcpStream::connect((ip, port)).await?;
+        let mut socket = BufStream::new(socket);
 
-        let (task_handle, ack, moving) = Self::spawn_tasks(socket_rx, stream);
+        Self::handshake(&mut socket).await?;
+
+        let (socket_rx, socket) = tokio::io::split(socket);
+
+        let (moving_tx, moving_rx) = watch::channel(false);
+        let (status_tx, status_rx) = watch::channel(None);
+
+        let inner = Arc::new(Inner::new(moving_rx, status_rx));
+
+        let task = tokio::spawn(Self::robot_arm_task(
+            inner.clone(),
+            moving_tx,
+            status_tx,
+            socket_rx,
+        ));
 
         Ok(RobotArm {
-            ack,
-            moving,
+            inner,
             socket,
-            task_handle,
+            task,
         })
+    }
+
+    async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> Result<()> {
+        RobotCommand::Hello.write_to(s, 0).await?;
+
+        let expected_sequence = [MAGIC_HEADER, 0xFE, 0];
+
+        // Drain the stream until we find the magic header and ACK code
+        'outer: loop {
+            for value in expected_sequence {
+                if value != s.read_u8().await? {
+                    continue 'outer;
+                }
+            }
+
+            break;
+        }
+
+        Ok(())
+    }
+
+    pub async fn set_stream_writer(&self, handle: StreamWriter) {
+        self.inner.shared.lock().await.stream = Some(handle)
+    }
+
+    pub fn controller(self) -> RobotController {
+        RobotController(self)
     }
 
     /* == Commands == */
 
-    pub async fn move_to(&mut self, motion: &Motion) {
-        match motion {
-            Motion::Linear(point) => {
-                let payload = bincode::encode_to_vec(point, config::standard()).unwrap();
-                self.send_command(0x02, &payload).await;
-            }
+    pub async fn execute_command(&mut self, command: RobotCommand<'_>) -> Result<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
 
-            Motion::Joint(joint) => {
-                let payload = bincode::encode_to_vec(joint, config::standard()).unwrap();
-                self.send_command(0x03, &payload).await;
-            }
+        let request_id = {
+            let mut lock = self.inner.shared.lock().await;
+            let request_id = lock.request_id();
+            lock.ack = Some((request_id, ack_tx));
+            request_id
+        };
 
-            Motion::Pose(joint) => {
-                let payload = bincode::encode_to_vec(joint, config::standard()).unwrap();
-                self.send_command(0x04, &payload).await;
+        command.write_to(&mut self.socket, request_id).await?;
+        ack_rx.await.ok();
+        Ok(())
+    }
+
+    pub async fn wait_settled(&self) {
+        let mut channel = self.inner.moving.clone();
+
+        for value in [true, false] {
+            loop {
+                if *channel.borrow() == value {
+                    break;
+                }
+
+                channel.changed().await.unwrap();
             }
         }
-    }
-
-    pub async fn set_config(&mut self, config: &MotionConfig) {
-        let payload = bincode::encode_to_vec(config, config::standard()).unwrap();
-        self.send_command(0x05, &payload).await;
-    }
-
-    pub async fn set_offset(&mut self, offset: &Point) {
-        let payload = bincode::encode_to_vec(offset, config::standard()).unwrap();
-        self.send_command(0x06, &payload).await;
-    }
-
-    pub async fn set_report_time(&mut self, time: f32) {
-        let payload = time.to_le_bytes();
-        self.send_command(0x07, &payload).await;
-    }
-
-    pub async fn return_home(&mut self) {
-        self.send_command(0x08, &[2]).await;
-    }
-
-    pub async fn wait_motion(&mut self) {
-        loop {
-            if *self.moving.borrow() {
-                break;
-            }
-
-            self.moving.changed().await.unwrap();
-        }
-
-        loop {
-            if !*self.moving.borrow() {
-                break;
-            }
-
-            self.moving.changed().await.unwrap();
-        }
-    }
-
-    pub async fn halt(&mut self) {
-        self.send_command(0x01, &[0]).await;
-    }
-
-    pub async fn return_and_stop(&mut self) {
-        self.send_command(0x01, &[1]).await;
-    }
-
-    async fn send_command(&mut self, command: u8, payload: &[u8]) {
-        let mut buf = Vec::new();
-
-        buf.push(MAGIC_HEADER);
-        buf.push(command);
-        buf.extend_from_slice(payload);
-
-        self.socket
-            .write_all(&buf)
-            .await
-            .expect("Socket write failure");
-
-        timeout(ACK_TIMEOUT, self.ack.recv())
-            .await
-            .expect("ACK timeout");
     }
 
     /* == Background tasks == */
 
-    fn spawn_tasks(
-        socket: OwnedReadHalf,
-        stream: Option<StreamHandle>,
-    ) -> (JoinSet<()>, mpsc::Receiver<()>, watch::Receiver<bool>) {
-        let (ack_tx, ack_rx) = mpsc::channel(1);
-        let (moving_tx, moving_rx) = watch::channel(false);
-
-        let mut set = JoinSet::new();
-
-        set.spawn(Self::receiver_task(ack_tx, moving_tx, socket, stream));
-
-        (set, ack_rx, moving_rx)
-    }
-
-    async fn receiver_task(
-        ack: mpsc::Sender<()>,
+    async fn robot_arm_task<R: AsyncRead + Unpin>(
+        inner: Arc<Inner>,
         moving: watch::Sender<bool>,
-        mut socket: OwnedReadHalf,
-        record: Option<StreamHandle>,
-    ) {
+        status: watch::Sender<Option<RobotStatus>>,
+        mut r: R,
+    ) -> Result<()> {
         loop {
-            if socket.read_u8().await.unwrap() != MAGIC_HEADER {
-                tracing::error!("Missing magic header");
-                continue;
-            }
-
-            let response = Response::decode(&mut socket).await.unwrap();
-
-            match response {
-                Response::Report(report) => {
-                    moving.send(true).unwrap();
-
-                    if let Some(ref record) = record {
-                        let pose = Pose::from(report.position);
-                        record.add(&pose.to_array()).await;
-                    }
+            match Response::read_from(&mut r).await? {
+                Response::Status(report) => {
+                    moving.send(true)?;
+                    status.send(Some(report))?;
                 }
 
-                Response::Ack => {
-                    ack.try_send(()).expect("Ack channel closed");
+                Response::Ack(id) => {
+                    let mut lock = inner.shared.lock().await;
+
+                    if let Some((_, ack)) = lock.ack.take_if(|(ack_id, _)| *ack_id == id) {
+                        ack.send(()).ok();
+                    }
                 }
 
                 Response::Error(code) => {
@@ -212,7 +163,7 @@ impl RobotArm {
 
                 Response::MotionComplete => {
                     tracing::info!("Motion complete");
-                    moving.send(false).unwrap();
+                    moving.send(false)?;
                 }
 
                 Response::PowerOff => {
@@ -223,40 +174,233 @@ impl RobotArm {
     }
 }
 
-impl Response {
-    async fn decode(socket: &mut OwnedReadHalf) -> Result<Response, ResponseError> {
-        let code = socket.read_u8().await.unwrap();
+impl Drop for RobotArm {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 
-        match code {
-            0x01 => {
-                let mut buf = [0u8; 72];
+impl Inner {
+    pub fn new(
+        moving: watch::Receiver<bool>,
+        status: watch::Receiver<Option<RobotStatus>>,
+    ) -> Self {
+        Inner {
+            moving,
+            shared: Mutex::new(Shared::default()),
+            status,
+        }
+    }
+}
 
-                socket
-                    .read_exact(&mut buf)
-                    .await
-                    .expect("Socket read failure");
+impl Shared {
+    fn request_id(&mut self) -> u8 {
+        self.command_counter = self.command_counter.wrapping_add(1);
+        self.command_counter
+    }
+}
 
-                let (report, _) = bincode::decode_from_slice(&buf, config::standard()).unwrap();
-                Ok(Response::Report(report))
+/* == Command == */
+
+pub enum RobotCommand<'a> {
+    Halt { return_home: bool },
+    Hello,
+    Move(Motion<'a>),
+    ReturnHome(MotionType),
+    SetReportInterval(f32),
+    SetSpeedProfile(&'a SpeedProfile),
+    SetToolOffset(&'a Point),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Motion<'a> {
+    Direct(&'a Point),
+    Joint(&'a Joint),
+    Linear(&'a Point),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum MotionType {
+    Direct,
+    Joint,
+    Linear,
+}
+
+#[derive(Encode)]
+pub struct SpeedProfile {
+    pub translation_limit: f32,
+    pub rotation_limit: f32,
+    pub acceleration_scale: u8,
+    pub velocity_scale: u8,
+    pub deceleration_scale: u8,
+}
+
+const SPEED_PROFILE_SIZE: usize = mem::size_of::<SpeedProfile>();
+
+impl From<&Motion<'_>> for MotionType {
+    fn from(value: &Motion) -> Self {
+        match value {
+            Motion::Direct(_) => MotionType::Direct,
+            Motion::Joint(_) => MotionType::Joint,
+            Motion::Linear(_) => MotionType::Linear,
+        }
+    }
+}
+
+/* == Command == */
+
+impl RobotCommand<'_> {
+    async fn write_to<W: AsyncWrite + Unpin>(&self, w: &mut W, request_id: u8) -> io::Result<()> {
+        w.write_u8(MAGIC_HEADER).await?;
+        w.write_u8(request_id).await?;
+
+        match self {
+            RobotCommand::Hello => {
+                w.write_u8(0x00).await?;
             }
+
+            RobotCommand::Halt { return_home } => {
+                w.write_u8(0x01).await?;
+                w.write_u8(*return_home as u8).await?;
+            }
+
+            RobotCommand::Move(motion) => {
+                w.write_u8(0x02 + MotionType::from(motion) as u8).await?;
+
+                match motion {
+                    Motion::Linear(point) | Motion::Direct(point) => {
+                        write_sized_value(w, point).await?;
+                    }
+
+                    Motion::Joint(joint) => write_sized_value(w, joint).await?,
+                }
+            }
+
+            RobotCommand::SetSpeedProfile(profile) => {
+                w.write_u8(0x05).await?;
+                write_sized_value(w, profile).await?;
+            }
+
+            RobotCommand::SetToolOffset(offset) => {
+                w.write_u8(0x06).await?;
+                write_sized_value(w, offset).await?;
+            }
+
+            RobotCommand::SetReportInterval(interval_s) => {
+                w.write_u8(0x07).await?;
+                w.write_f32_le(*interval_s).await?;
+            }
+
+            RobotCommand::ReturnHome(motion_type) => {
+                w.write_u8(0x08).await?;
+                w.write_u8(*motion_type as u8).await?;
+            }
+        };
+
+        Ok(())
+    }
+}
+
+/* == Controller == */
+
+pub struct RobotController(RobotArm);
+
+impl RobotController {
+    pub async fn move_to(&mut self, motion: Motion<'_>) -> Result<()> {
+        self.0.execute_command(RobotCommand::Move(motion)).await
+    }
+
+    pub async fn set_offset(&mut self, offset: &Point) -> Result<()> {
+        self.0
+            .execute_command(RobotCommand::SetToolOffset(offset))
+            .await
+    }
+
+    pub async fn set_profile(&mut self, profile: &SpeedProfile) -> Result<()> {
+        self.0
+            .execute_command(RobotCommand::SetSpeedProfile(profile))
+            .await
+    }
+
+    pub async fn go_home(&mut self, motion_type: MotionType) -> Result<()> {
+        self.0
+            .execute_command(RobotCommand::ReturnHome(motion_type))
+            .await
+    }
+
+    pub async fn halt(&mut self, return_home: bool) -> Result<()> {
+        self.0
+            .execute_command(RobotCommand::Halt { return_home })
+            .await
+    }
+
+    pub async fn wait_settled(&self) {
+        self.0.wait_settled().await
+    }
+}
+
+/* == Response == */
+
+impl Response {
+    async fn read_from<R: AsyncRead + Unpin>(r: &mut R) -> Result<Response> {
+        if r.read_u8().await? != MAGIC_HEADER {
+            bail!("Missing magic header");
+        }
+
+        match r.read_u8().await? {
+            0x01 => {
+                let status = read_sized_value(r).await?;
+                Ok(Response::Status(status))
+            }
+
             0x02 => Ok(Response::MotionComplete),
             0x03 => Ok(Response::PowerOff),
-            0xFE => Ok(Response::Ack),
+
+            0xFE => {
+                let id = r.read_u8().await?;
+                Ok(Response::Ack(id))
+            }
 
             0xFF => {
-                let error = socket.read_u16_le().await.unwrap();
+                let error = r.read_u16_le().await?;
                 Ok(Response::Error(error))
             }
 
-            _ => {
-                tracing::error!("Invalid response {:02x}. Draining TCP stream", code);
-                Self::drain(socket).await;
-                Err(ResponseError)
+            code => {
+                tracing::error!("Unsupported code: {code:02x}");
+                bail!("Unsupported code: {code:02x}");
             }
         }
     }
+}
 
-    async fn drain(socket: &mut OwnedReadHalf) {
-        socket.try_read_buf(&mut Vec::new()).unwrap();
-    }
+/* == Protocol == */
+
+fn binary_config() -> impl bincode::config::Config {
+    bincode::config::standard()
+        .with_little_endian()
+        .with_fixed_int_encoding()
+}
+
+async fn read_sized_value<T, R>(r: &mut R) -> Result<T>
+where
+    T: Decode<()>,
+    R: AsyncRead + Unpin,
+{
+    let mut buf = vec![0u8; mem::size_of::<T>()];
+    r.read_exact(&mut buf).await?;
+
+    let (value, _) = bincode::decode_from_slice(&buf, binary_config())?;
+    Ok(value)
+}
+
+pub async fn write_sized_value<T, W>(w: &mut W, value: &T) -> io::Result<()>
+where
+    T: Encode,
+    W: AsyncWrite + Unpin,
+{
+    let buf = bincode::encode_to_vec(value, binary_config()).unwrap();
+    w.write_all(&buf).await?;
+
+    Ok(())
 }

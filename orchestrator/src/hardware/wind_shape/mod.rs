@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use eyre::{eyre, Result};
 use tokio::{
     io,
     net::UdpSocket,
@@ -73,7 +74,7 @@ enum ResponsePayload {
 }
 
 impl WindShape {
-    pub async fn connect(ip: IpAddr) -> io::Result<WindShape> {
+    pub async fn connect(ip: IpAddr) -> Result<WindShape> {
         let link = Link::connect(ip).await;
 
         // Attempt to handshake with the device with a timeout
@@ -233,17 +234,13 @@ impl Link {
         Ok(())
     }
 
-    async fn recv_response(&self) -> io::Result<Response> {
+    async fn recv_response(&self) -> Result<Response> {
         let mut buffer = vec![0u8; RX_BUFFER_SIZE];
         let (size, _) = self.socket.recv_from(&mut buffer).await?;
-
-        Response::parse_bytes(&buffer[..size]).ok_or(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Invalid response",
-        ))
+        Response::parse_bytes(&buffer[..size]).ok_or(eyre!("Invalid response"))
     }
 
-    async fn recv_handshake(&self) -> io::Result<u8> {
+    async fn recv_handshake(&self) -> Result<u8> {
         loop {
             let response = self.recv_response().await?;
 

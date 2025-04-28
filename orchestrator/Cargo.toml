@@ -4,13 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+axum = "0.8"
 bincode = "2"
 butterworth = "0.1"
 bytes = "1"
 chrono = "0.4"
 chunked-bytes = "0.3"
 clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
 csv = "1.3"
+eyre = "0.6"
 quaternion = "2"
 quick-xml = { version = "0.37", features = ["serialize"] }
 reqwest = "0.12"

@@ -1,11 +1,13 @@
-use std::{io, net::IpAddr};
+use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
+use eyre::Result;
 
 mod config;
 mod convert;
 mod examples;
 mod run;
+mod server;
 mod test;
 mod view;
 
@@ -37,6 +39,11 @@ enum Command {
         config: String,
     },
 
+    Server {
+        #[arg(short, long, default_value_t = 8080)]
+        port: u16,
+    },
+
     Test {
         #[arg(long)]
         robot_ip: IpAddr,
@@ -57,7 +64,7 @@ enum ConfigCommand {
     },
 }
 
-pub async fn parse() -> io::Result<()> {
+pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -66,6 +73,7 @@ pub async fn parse() -> io::Result<()> {
         Command::Counter => self::examples::counter().await,
         Command::PlotJugglerDemo => self::examples::plot_juggler().await,
         Command::Run { config } => self::run::launch(&config).await,
+        Command::Server { port } => self::server::start(port).await,
 
         Command::Test {
             robot_ip,

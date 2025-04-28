@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read, Write},
+    io::{Read, Write},
     iter,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,33 +11,28 @@ use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
 use chrono::{DateTime, Utc};
 use chunked_bytes::ChunkedBytes;
-use tokio::{sync::Mutex, time::Instant};
+use eyre::{bail, Context, Result};
+use tokio::{
+    sync::{Mutex, MutexGuard},
+    time::Instant,
+};
 
-use crate::{data::SegmentedRecordingIterator, misc::compact_config};
+use crate::{
+    data::SegmentedRecordingIterator,
+    misc::{compact_config, plot_juggler::PlotJugglerBroadcaster},
+};
 
 const MAGIC_NUMBER: u32 = u32::from_be_bytes(*b"RCDG");
 const FORMAT_VERSION: u8 = 1;
 
 #[derive(Default)]
-pub struct Recorder {
-    inner: Arc<RecorderInner>,
+pub struct Sink {
+    inner: Arc<Inner>,
 }
 
-#[derive(Default)]
-struct RecorderInner {
-    recording: AtomicBool,
-    shared: Mutex<RecorderShared>,
-}
-
-struct RecorderShared {
-    ref_time: Instant,
-    start_time: DateTime<Utc>,
-    streams: Vec<RecorderStream>,
-}
-
-struct RecorderStream {
-    buffer: RecorderBuffer,
-    definition: StreamDefinition,
+pub struct StreamWriter {
+    definition: Arc<StreamDefinition>,
+    inner: Arc<Inner>,
 }
 
 #[derive(Clone, Debug, Decode, Encode)]
@@ -46,116 +41,183 @@ pub struct StreamDefinition {
     pub channels: Vec<String>,
 }
 
-pub struct StreamHandle {
-    recorder: Arc<RecorderInner>,
-    stream_id: usize,
+struct Stream {
+    buffer: StreamBuffer,
+    definition: Arc<StreamDefinition>,
 }
 
-impl Recorder {
+#[derive(Default)]
+struct Inner {
+    recording: AtomicBool,
+    shared: Mutex<InnerShared>,
+}
+
+struct InnerShared {
+    plot_juggler: Option<PlotJugglerBroadcaster>,
+    reference_instant: Instant,
+    reference_time: DateTime<Utc>,
+    streams: Vec<Stream>,
+}
+
+impl Sink {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub async fn add_stream<T, U>(&self, name: T, channels: &[U]) -> StreamHandle
-    where
-        T: ToString,
-        U: ToString,
-    {
+    /* == Streams == */
+
+    pub async fn add_stream(&self, name: String, channels: Vec<String>) -> Result<StreamWriter> {
         let mut lock = self.inner.shared.lock().await;
 
-        if lock.streams.len() >= u8::MAX as usize {
-            panic!("Maximum number of streams reached");
+        if lock.find_stream_with_name(&name).is_some() {
+            bail!("Stream with name {} already exists", name);
         }
 
-        let channels = channels.iter().map(ToString::to_string).collect();
-        let name = name.to_string();
+        let definition = Arc::new(StreamDefinition { name, channels });
 
-        let stream = StreamDefinition { name, channels };
+        lock.streams.push(Stream::new(definition.clone()));
 
-        // This must be before pushing the stream to the vector!
-        let stream_id = lock.streams.len();
+        Ok(StreamWriter {
+            definition,
+            inner: self.inner.clone(),
+        })
+    }
 
-        lock.streams.push(RecorderStream {
-            buffer: RecorderBuffer::new(),
-            definition: stream.clone(),
-        });
+    pub async fn remove_stream(&self, name: &str) -> bool {
+        let mut lock = self.inner.shared.lock().await;
 
-        let recorder = self.inner.clone();
+        let maybe_stream = lock.find_stream_with_name(name);
 
-        StreamHandle {
-            recorder,
-            stream_id,
+        if let Some(i) = maybe_stream {
+            lock.streams.swap_remove(i);
         }
+
+        maybe_stream.is_some()
     }
 
-    pub fn start_recording(&self) {
-        tracing::debug!("Resumed recording");
-        self.inner.recording.store(true, Ordering::SeqCst);
-    }
+    /* == Recording == */
 
-    pub fn stop_recording(&self) {
-        tracing::debug!("Stopped recording");
-        self.inner.recording.store(false, Ordering::SeqCst);
+    pub fn set_record(&self, active: bool) {
+        self.inner.recording.store(active, Ordering::SeqCst);
     }
 
     pub async fn complete(&self) -> Recording {
-        self.stop_recording();
+        self.set_record(false);
 
         let mut lock = self.inner.shared.lock().await;
         tracing::debug!("Completed recording");
 
-        let timestamp_us = lock.start_time.timestamp_micros();
-
-        let streams = lock
-            .streams
-            .iter_mut()
-            .map(RecorderStream::complete)
-            .collect();
+        let timestamp_us = lock.reference_time.timestamp_micros();
+        let streams = lock.streams.iter_mut().map(Stream::complete).collect();
 
         Recording::new(timestamp_us, streams)
     }
 
     pub async fn clear_buffer(&self) {
-        tracing::debug!("Cleared recording buffer");
-
         for stream in &mut self.inner.shared.lock().await.streams {
             stream.buffer.clear();
         }
     }
 
-    pub async fn reset_reference_time(&self) {
-        tracing::debug!("Recording reference time reset");
-        self.inner.shared.lock().await.ref_time = Instant::now();
-        self.inner.shared.lock().await.start_time = Utc::now();
+    pub async fn set_time_now(&self) {
+        let mut lock = self.inner.shared.lock().await;
+        lock.reference_instant = Instant::now();
+        lock.reference_time = Utc::now();
     }
 
     pub async fn streams(&self) -> Vec<StreamDefinition> {
         let lock = self.inner.shared.lock().await;
-        lock.streams.iter().map(|s| s.definition.clone()).collect()
+
+        lock.streams
+            .iter()
+            .map(|s| (*s.definition).clone())
+            .collect()
     }
 }
 
-impl RecorderShared {
+impl StreamWriter {
+    pub async fn write_now(&self, channels: &[f32]) {
+        if self.inner.recording.load(Ordering::SeqCst) {
+            let mut lock = self.inner.shared.lock().await;
+            let time_us = lock.elapsed_micros();
+            Self::write(&mut lock, &self.definition, time_us, channels)
+        }
+    }
+
+    pub async fn write_at(&self, channels: &[f32], time_us: u32) {
+        if self.inner.recording.load(Ordering::SeqCst) {
+            Self::write(
+                &mut self.inner.shared.lock().await,
+                &self.definition,
+                time_us,
+                channels,
+            );
+        }
+    }
+
+    fn write(
+        lock: &mut MutexGuard<'_, InnerShared>,
+        definition: &Arc<StreamDefinition>,
+        time_us: u32,
+        channels: &[f32],
+    ) {
+        // Verify that the number of channels matches the stream definition
+        debug_assert_eq!(channels.len(), definition.channels.len());
+
+        let i = lock
+            .find_stream_with_definition(definition)
+            .expect("Stream not registered with sink!");
+
+        lock.streams[i].buffer.store(time_us, channels);
+    }
+}
+
+impl StreamDefinition {
+    pub fn n_channels(&self) -> usize {
+        self.channels.len()
+    }
+
+    pub fn qualified_channel_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.channels.iter().map(|s| format!("{}/{}", self.name, s))
+    }
+}
+
+impl InnerShared {
     fn elapsed_micros(&self) -> u32 {
-        self.ref_time
-            .elapsed()
-            .as_micros()
-            .try_into()
-            .expect("Time overflow")
+        let delta = self.reference_instant.elapsed();
+        delta.as_micros().try_into().expect("Time overflow")
+    }
+
+    fn find_stream_with_name(&self, name: &str) -> Option<usize> {
+        self.streams.iter().position(|s| s.definition.name == name)
+    }
+
+    fn find_stream_with_definition(&self, definition: &Arc<StreamDefinition>) -> Option<usize> {
+        self.streams
+            .iter()
+            .position(|s| Arc::ptr_eq(&s.definition, definition))
     }
 }
 
-impl Default for RecorderShared {
+impl Default for InnerShared {
     fn default() -> Self {
         Self {
-            ref_time: Instant::now(),
-            start_time: Utc::now(),
+            plot_juggler: None,
+            reference_instant: Instant::now(),
+            reference_time: Utc::now(),
             streams: Vec::new(),
         }
     }
 }
 
-impl RecorderStream {
+impl Stream {
+    pub fn new(definition: Arc<StreamDefinition>) -> Self {
+        Self {
+            buffer: StreamBuffer::new(),
+            definition,
+        }
+    }
+
     pub fn complete(&mut self) -> RecordedStream {
         let n_channels = self.definition.n_channels();
 
@@ -163,7 +225,7 @@ impl RecorderStream {
         let mut unsorted_data = Vec::new();
 
         // Drain the buffer, appending data to buffer, collecting timestamps and indices
-        let mut samples = iter::from_fn(|| self.buffer.extract(&mut unsorted_data, n_channels))
+        let mut samples = iter::from_fn(|| self.buffer.retrieve(&mut unsorted_data, n_channels))
             .enumerate()
             .collect::<Vec<_>>();
 
@@ -183,7 +245,7 @@ impl RecorderStream {
         }
 
         let data_timestamps_us = samples.into_iter().map(|(_, t)| t).collect();
-        let definition = self.definition.clone();
+        let definition = (*self.definition).clone();
 
         RecordedStream {
             data,
@@ -193,48 +255,22 @@ impl RecorderStream {
     }
 }
 
-impl StreamDefinition {
-    pub fn n_channels(&self) -> usize {
-        self.channels.len()
-    }
+/* == StreamBuffer == */
 
-    pub fn qualified_channel_names(&self) -> impl Iterator<Item = String> + '_ {
-        self.channels.iter().map(|s| format!("{}/{}", self.name, s))
-    }
-}
+struct StreamBuffer(ChunkedBytes);
 
-impl StreamHandle {
-    pub async fn add(&self, channels: &[f32]) {
-        if self.recorder.recording.load(Ordering::SeqCst) {
-            let mut lock = self.recorder.shared.lock().await;
-
-            let time_us = lock.elapsed_micros();
-            let rec_stream = &mut lock.streams[self.stream_id];
-
-            // Check that the number of channels matches the stream definition
-            debug_assert_eq!(channels.len(), rec_stream.definition.channels.len());
-
-            rec_stream.buffer.append(time_us, channels);
-        }
-    }
-}
-
-/* == RecorderBuffer == */
-
-struct RecorderBuffer(ChunkedBytes);
-
-impl RecorderBuffer {
+impl StreamBuffer {
     pub fn new() -> Self {
         Self(ChunkedBytes::new())
     }
 
-    pub fn append(&mut self, relative_time: u32, channels: &[f32]) {
+    pub fn store(&mut self, time_us: u32, channels: &[f32]) {
         let buffer = &mut self.0;
-        buffer.put_u32_ne(relative_time);
+        buffer.put_u32_ne(time_us);
         channels.iter().for_each(|v| buffer.put_f32_ne(*v));
     }
 
-    pub fn extract(&mut self, data: &mut Vec<f32>, n_channels: usize) -> Option<u32> {
+    pub fn retrieve(&mut self, data: &mut Vec<f32>, n_channels: usize) -> Option<u32> {
         let time = self.0.try_get_u32_ne().ok()?;
         (0..n_channels).for_each(|_| data.push(self.0.get_f32_ne()));
         Some(time)
@@ -281,22 +317,14 @@ impl Recording {
 
     /* == Encoding & decoding == */
 
-    pub fn decode<R: Read>(reader: &mut R) -> io::Result<Self> {
-        bincode::decode_from_std_read(reader, compact_config()).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to decode recording: {e}"),
-            )
-        })
+    pub fn decode<R: Read>(reader: &mut R) -> Result<Self> {
+        bincode::decode_from_std_read(reader, compact_config())
+            .wrap_err("Failed to decode recording")
     }
 
-    pub fn encode<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        bincode::encode_into_std_write(self, writer, compact_config()).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to encode recording: {e}"),
-            )
-        })?;
+    pub fn encode<W: Write>(&self, writer: &mut W) -> Result<()> {
+        bincode::encode_into_std_write(self, writer, compact_config())
+            .wrap_err("Failed to encode recording")?;
 
         Ok(())
     }

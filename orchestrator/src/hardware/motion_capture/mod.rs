@@ -1,13 +1,14 @@
 use std::{
-    io,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
 
 use bytes::Bytes;
+use eyre::{bail, Result};
+use protocol::RigidBodyData;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recording::{Recorder, StreamHandle};
+use crate::recording::{Sink, StreamWriter};
 
 pub mod protocol;
 
@@ -19,6 +20,8 @@ const BUFFER_SIZE: usize = 16384; // 8KB
 const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
 const STREAM_NAME: &str = "motion_capture";
 
+type Data = [f32; CHANNELS.len()];
+
 pub struct MotionCapture {
     inner: Arc<MotionCaptureInner>,
     task: JoinHandle<Result<(), TaskError>>,
@@ -27,7 +30,12 @@ pub struct MotionCapture {
 struct MotionCaptureInner {
     description: Mutex<protocol::Description>,
     socket: UdpSocket,
-    subscriptions: Mutex<Vec<(i32, StreamHandle)>>,
+    subscriptions: Mutex<Vec<Subscription>>,
+}
+
+struct Subscription {
+    id: i32,
+    stream: StreamWriter,
 }
 
 #[derive(Debug)]
@@ -37,7 +45,7 @@ enum TaskError {
 }
 
 impl MotionCapture {
-    pub async fn connect(ip: IpAddr, multicast_ip: Ipv4Addr) -> io::Result<MotionCapture> {
+    pub async fn connect(ip: IpAddr, multicast_ip: Ipv4Addr) -> Result<MotionCapture> {
         let description = {
             let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
             socket.connect((ip, COMMAND_PORT)).await?;
@@ -60,38 +68,40 @@ impl MotionCapture {
         Ok(MotionCapture { inner, task })
     }
 
-    pub async fn subscribe<S>(&self, name: S, recorder: &Recorder)
-    where
-        S: AsRef<str> + Into<String>,
-    {
+    pub async fn subscribe(&self, name: &str, sink: &Sink) -> Result<()> {
         let description_lock = self.inner.description.lock().await;
 
-        let rigid_body = description_lock
-            .get_rb(name.as_ref())
-            .expect("Rigid body not found");
+        let Some(rigid_body) = description_lock.get_rb(name) else {
+            bail!("Rigid body {name} not found");
+        };
 
         let mut subscription_lock = self.inner.subscriptions.lock().await;
 
-        if subscription_lock.iter().any(|(id, _)| *id == rigid_body.id) {
-            tracing::warn!("Already subscribed to rigid body: {}", name.as_ref());
-            return;
+        if subscription_lock.iter().any(|s| s.id == rigid_body.id) {
+            tracing::warn!("Already subscribed to rigid body: {name}");
+            return Ok(());
         }
 
-        if !subscription_lock.iter().any(|s| s.0 == rigid_body.id) {
-            let stream_name = format!("{STREAM_NAME}/{}", name.as_ref());
-            let stream = recorder.add_stream(stream_name, &CHANNELS).await;
-            subscription_lock.push((rigid_body.id, stream));
-        }
+        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let stream_name = format!("{STREAM_NAME}/{name}");
+        let stream = sink.add_stream(stream_name, channels).await?;
+
+        subscription_lock.push(Subscription::new(rigid_body.id, stream));
+
+        Ok(())
     }
 
-    pub async fn unsubscribe(&self, name: &str) -> bool {
+    pub async fn unsubscribe(&self, name: &str, sink: &Sink) -> bool {
         let description_lock = self.inner.description.lock().await;
 
         if let Some(rigid_body) = description_lock.get_rb(name) {
             let mut lock = self.inner.subscriptions.lock().await;
 
-            if let Some(pos) = lock.iter().position(|s| s.0 == rigid_body.id) {
+            if let Some(pos) = lock.iter().position(|s| s.id == rigid_body.id) {
                 lock.swap_remove(pos);
+
+                let stream_name = format!("{STREAM_NAME}/{name}");
+                sink.remove_stream(&stream_name).await;
                 return true;
             }
         }
@@ -99,7 +109,7 @@ impl MotionCapture {
         false
     }
 
-    pub async fn refresh_descriptions(&self) -> io::Result<()> {
+    pub async fn refresh_descriptions(&self) -> Result<()> {
         let new_description = Self::get_model_definitions(&self.inner.socket).await?;
         let mut description = self.inner.description.lock().await;
 
@@ -129,11 +139,9 @@ impl MotionCapture {
                 let subscriptions = inner.subscriptions.lock().await;
 
                 for rb in frame.rigid_bodies {
-                    if let Some((_, stream)) = subscriptions.iter().find(|s| s.0 == rb.id) {
-                        let p = &rb.position;
-                        let q = &rb.orientation;
-
-                        stream.add(&[p.0, p.1, p.2, q.0, q.1, q.2, q.3]).await;
+                    if let Some(subscription) = subscriptions.iter().find(|s| s.id == rb.id) {
+                        let data: Data = rb.into();
+                        subscription.stream.write_now(&data).await;
                     }
                 }
             }
@@ -142,7 +150,7 @@ impl MotionCapture {
         }
     }
 
-    async fn handshake(socket: &UdpSocket) -> io::Result<()> {
+    async fn handshake(socket: &UdpSocket) -> Result<()> {
         tracing::info!("Sending handshake message...");
 
         let msg = protocol::handshake_msg();
@@ -153,15 +161,11 @@ impl MotionCapture {
 
         match protocol::parse_message(&mut Bytes::from(buf)) {
             Ok(msg) if msg.id == protocol::NAT_SERVERINFO => Ok(()),
-
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid handshake response",
-            )),
+            _ => bail!("Invalid handshake response"),
         }
     }
 
-    async fn get_model_definitions(socket: &UdpSocket) -> io::Result<protocol::Description> {
+    async fn get_model_definitions(socket: &UdpSocket) -> Result<protocol::Description> {
         tracing::info!("Requesting model definitions...");
 
         let msg = protocol::request_definitions_msg();
@@ -177,17 +181,11 @@ impl MotionCapture {
                 match protocol::parse_description(msg.payload) {
                     Ok(defs) => Ok(defs),
 
-                    Err(_) => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Invalid model definitions",
-                    )),
+                    Err(_) => bail!("Invalid m odel definitions"),
                 }
             }
 
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid handshake response",
-            )),
+            _ => bail!("Invalid handshake response"),
         }
     }
 }
@@ -196,5 +194,23 @@ impl Drop for MotionCapture {
     fn drop(&mut self) {
         tracing::warn!("Stopping motion capture task");
         self.task.abort();
+    }
+}
+
+impl Subscription {
+    pub fn new(id: i32, stream: StreamWriter) -> Self {
+        Subscription { id, stream }
+    }
+}
+
+impl From<RigidBodyData> for Data {
+    fn from(rb: RigidBodyData) -> Self {
+        let RigidBodyData {
+            position: (x, y, z),
+            orientation: (qx, qy, qz, qw),
+            ..
+        } = rb;
+
+        [x, y, z, qx, qy, qz, qw]
     }
 }

@@ -1,8 +1,10 @@
 use std::io;
 
+use eyre::Result;
+
 use crate::recording::{Recording, StreamDefinition};
 
-pub async fn segment(divisions: u32) -> io::Result<()> {
+pub async fn segment(divisions: u32) -> Result<()> {
     let recording = Recording::decode(&mut io::stdin())?;
 
     let mut segmented_recording = recording

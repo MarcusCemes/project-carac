@@ -1,5 +1,6 @@
 use std::{io, time::Duration};
 
+use eyre::{Context, Result};
 use tokio::{fs, time::sleep};
 
 use crate::{
@@ -8,10 +9,10 @@ use crate::{
         load_cell::LoadCell, motion_capture::MotionCapture, robot_arm::RobotArm,
         wind_shape::WindShape,
     },
-    recording::Recorder,
+    recording::Sink,
 };
 
-pub async fn launch(config_path: &str) -> io::Result<()> {
+pub async fn launch(config_path: &str) -> Result<()> {
     let config: Config = {
         let data = fs::read(config_path).await?;
 
@@ -23,53 +24,53 @@ pub async fn launch(config_path: &str) -> io::Result<()> {
         })?
     };
 
-    let ctx = Context::create(&config).await;
-    let recorder = Recorder::new();
+    let ctx = HardwareContext::create(&config).await?;
+    let sink = Sink::new();
 
     if let Some((mc, cfg)) = &ctx.motion_capture.zip(config.hardware.motion_capture) {
         for rb in &cfg.rigid_bodies {
-            mc.subscribe(rb, &recorder).await;
+            mc.subscribe(rb, &sink).await?;
         }
     }
 
     if let Some(lc) = &ctx.load_cell {
-        lc.subscribe(&recorder).await;
+        lc.subscribe(&sink).await?;
         lc.set_bias().await?;
         lc.start_streaming().await?;
     }
 
-    recorder.clear_buffer().await;
-    recorder.reset_reference_time().await;
-    recorder.start_recording();
+    sink.clear_buffer().await;
+    sink.set_time_now().await;
+    sink.set_record(true);
 
     sleep(Duration::from_secs_f32(2.)).await;
 
-    recorder.stop_recording();
+    sink.set_record(false);
 
     if let Some(lc) = &ctx.load_cell {
         lc.stop_streaming().await?;
     }
 
-    recorder.complete().await.encode(&mut io::stdout())?;
+    sink.complete().await.encode(&mut io::stdout())?;
 
     Ok(())
 }
 
-struct Context {
-    motion_capture: Option<MotionCapture>,
-    load_cell: Option<LoadCell>,
-    wind_shape: Option<WindShape>,
-    robot_arm: Option<RobotArm>,
+struct HardwareContext {
+    pub motion_capture: Option<MotionCapture>,
+    pub load_cell: Option<LoadCell>,
+    pub wind_shape: Option<WindShape>,
+    pub robot_arm: Option<RobotArm>,
 }
 
-impl Context {
-    async fn create(config: &Config) -> Self {
-        Context {
+impl HardwareContext {
+    async fn create(config: &Config) -> Result<Self> {
+        Ok(Self {
             motion_capture: match &config.hardware.motion_capture {
                 Some(cfg) => Some(
                     MotionCapture::connect(cfg.ip, cfg.multicast_ip)
                         .await
-                        .expect("Failed to connect to motion capture"),
+                        .wrap_err("Failed to connect to motion capture")?,
                 ),
                 None => None,
             },
@@ -78,16 +79,16 @@ impl Context {
                 Some(cfg) => Some(
                     LoadCell::connect(cfg.ip)
                         .await
-                        .expect("Failed to connect to load cell"),
+                        .wrap_err("Failed to connect to load cell")?,
                 ),
                 None => None,
             },
 
             robot_arm: match &config.hardware.robot_arm {
                 Some(cfg) => Some(
-                    RobotArm::connect(cfg.ip, cfg.port, None)
+                    RobotArm::connect(cfg.ip, cfg.port)
                         .await
-                        .expect("Failed to connect to robot arm"),
+                        .wrap_err("Failed to connect to robot arm")?,
                 ),
                 None => None,
             },
@@ -96,10 +97,10 @@ impl Context {
                 Some(wind_shape) => Some(
                     WindShape::connect(wind_shape.ip)
                         .await
-                        .expect("Failed to connect to wind shape"),
+                        .wrap_err("Failed to connect to wind shape")?,
                 ),
                 None => None,
             },
-        }
+        })
     }
 }

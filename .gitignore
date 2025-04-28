@@ -4,6 +4,8 @@ install/
 log/
 __pycache__/
 
+rustc-ice*.txt
+
 .env
 config.yaml
 *.csv
