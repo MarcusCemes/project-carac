@@ -1,12 +1,16 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
   <Program name="sendAck">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="id" type="num" xsi:type="element" />
+    </Parameters>
     <Locals>
-      <Local name="buffer" type="num" xsi:type="array" size="2" />
+      <Local name="buffer" type="num" xsi:type="array" size="3" />
     </Locals>
     <Code><![CDATA[begin
   buffer[0] = MAGIC_HEADER
   buffer[1] = 254
+  buffer[2] = id
   sioSet(socket, buffer)
 end
 ]]></Code>

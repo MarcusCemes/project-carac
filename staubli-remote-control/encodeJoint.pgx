@@ -16,7 +16,7 @@
   elements[4] = value.j5
   elements[5] = value.j6
 
-  toBinary(elements, 6, "4.0l", buffer)
+  toBinary(elements, 6, "4.0b", buffer)
 end
 ]]></Code>
   </Program>

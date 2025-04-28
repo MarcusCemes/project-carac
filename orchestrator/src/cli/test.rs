@@ -52,11 +52,11 @@ async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
     r.set_profile(&profile).await?;
 
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     p.x = 1200.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     offset.z = 100.;
     profile.acceleration_scale = 100;
@@ -66,19 +66,19 @@ async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
     r.set_profile(&profile).await?;
 
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     p.rx = 90.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     p.rx = -90.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     p.rx = 0.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     offset.z = 0.;
     r.set_offset(&offset).await?;
@@ -86,7 +86,7 @@ async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
     p.x = 500.;
     p.z = 450.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     profile.acceleration_scale = 15;
     profile.deceleration_scale = 15;
@@ -95,17 +95,17 @@ async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
 
     p.rz = -45.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     p.rz = 20.;
     r.move_to(Motion::Linear(&p)).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     profile.rotation_limit = 10000.;
     profile.translation_limit = 10000.;
 
     r.go_home(MotionType::Direct).await?;
-    r.wait_settled().await;
+    r.wait_settled().await?;
 
     Ok(())
 }

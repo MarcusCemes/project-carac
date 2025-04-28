@@ -7,14 +7,7 @@ use std::{
 };
 
 use eyre::{eyre, Result};
-use tokio::{
-    io,
-    net::UdpSocket,
-    select,
-    sync::watch,
-    task::JoinSet,
-    time::{interval, timeout},
-};
+use tokio::{io, net::UdpSocket, select, sync::watch, task::JoinSet, time::interval};
 
 const MODULE_COUNT: usize = 56;
 const MODULE_FANS: usize = 18;
@@ -22,7 +15,6 @@ const MODULE_FANS: usize = 18;
 const LOCAL_PORT: u16 = 60333;
 const REMOTE_PORT: u16 = 60334;
 
-const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3);
 const STATUS_INTERVAL: Duration = Duration::from_millis(40);
 
 const RX_BUFFER_SIZE: usize = 65536;
@@ -77,9 +69,12 @@ impl WindShape {
     pub async fn connect(ip: IpAddr) -> Result<WindShape> {
         let link = Link::connect(ip).await;
 
-        // Attempt to handshake with the device with a timeout
+        tracing::debug!("Handshaking with WindShape...");
+
         link.send_request(Request::InitiateConnection, 0).await?;
-        let client_id = timeout(CONNECTION_TIMEOUT, link.recv_handshake()).await??;
+        let client_id = link.recv_handshake().await?;
+
+        tracing::info!("Handshake successful!");
 
         // Spawn background tasks to send and receive status messages
         let (status, request_control, task_handle) = Self::spawn_tasks(client_id, link.clone());

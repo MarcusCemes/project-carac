@@ -1,6 +1,6 @@
 use std::io;
 
-use eyre::Result;
+use eyre::{ContextCompat, Result};
 
 use crate::recording::{Recording, StreamDefinition};
 
@@ -9,7 +9,7 @@ pub async fn segment(divisions: u32) -> Result<()> {
 
     let mut segmented_recording = recording
         .segment(divisions)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Failed to segment recording"))?;
+        .wrap_err("Failed to segment recording")?;
 
     let mut w = csv::Writer::from_writer(io::stdout());
 
@@ -20,7 +20,7 @@ pub async fn segment(divisions: u32) -> Result<()> {
         .flat_map(StreamDefinition::qualified_channel_names)
         .collect::<Vec<_>>();
 
-    w.write_field("timestamp_s")?;
+    w.write_field("time")?;
     w.write_record(&header)?;
 
     let mut buf = Vec::new();

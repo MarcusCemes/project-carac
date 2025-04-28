@@ -13,15 +13,9 @@ use crate::{
 };
 
 pub async fn launch(config_path: &str) -> Result<()> {
-    let config: Config = {
+    let config = {
         let data = fs::read(config_path).await?;
-
-        serde_yaml::from_slice(&data).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to parse config: {e}"),
-            )
-        })?
+        Config::load(&data)?
     };
 
     let ctx = HardwareContext::create(&config).await?;

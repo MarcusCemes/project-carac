@@ -1,28 +1,35 @@
-use std::{io, mem, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    mem,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
 use bincode::{Decode, Encode};
-use eyre::{bail, Result};
+use bytes::{Buf, BufMut};
+use eyre::{bail, eyre, Result};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf},
-    net::TcpStream,
+    net::UdpSocket,
+    select,
     sync::{oneshot, watch, Mutex},
     task::JoinHandle,
 };
 
 use crate::{defs::*, recording::StreamWriter};
 
-const ACK_TIMEOUT: Duration = Duration::from_secs(3);
+const BUFFER_SIZE: usize = 1024;
+const HANDSHAKE_REQUEST_ID: u8 = 0;
 const MAGIC_HEADER: u8 = 0x95;
 
 pub struct RobotArm {
     inner: Arc<Inner>,
-    socket: WriteHalf<BufStream<TcpStream>>,
     task: JoinHandle<Result<()>>,
 }
 
 struct Inner {
+    error: watch::Receiver<Option<u16>>,
     moving: watch::Receiver<bool>,
     shared: Mutex<Shared>,
+    socket: UdpSocket,
     status: watch::Receiver<Option<RobotStatus>>,
 }
 
@@ -50,47 +57,46 @@ struct RobotStatus {
 
 impl RobotArm {
     pub async fn connect(ip: IpAddr, port: u16) -> Result<RobotArm> {
-        let socket = TcpStream::connect((ip, port)).await?;
-        let mut socket = BufStream::new(socket);
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
+        socket.connect((ip, port)).await?;
 
-        Self::handshake(&mut socket).await?;
+        Self::handshake(&socket).await?;
 
-        let (socket_rx, socket) = tokio::io::split(socket);
-
+        let (error_tx, error_rx) = watch::channel(None);
         let (moving_tx, moving_rx) = watch::channel(false);
         let (status_tx, status_rx) = watch::channel(None);
 
-        let inner = Arc::new(Inner::new(moving_rx, status_rx));
+        let inner = Arc::new(Inner::new(error_rx, moving_rx, status_rx, socket));
 
         let task = tokio::spawn(Self::robot_arm_task(
             inner.clone(),
+            error_tx,
             moving_tx,
             status_tx,
-            socket_rx,
         ));
 
-        Ok(RobotArm {
-            inner,
-            socket,
-            task,
-        })
+        Ok(RobotArm { inner, task })
     }
 
-    async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> Result<()> {
-        RobotCommand::Hello.write_to(s, 0).await?;
+    async fn handshake(socket: &UdpSocket) -> Result<()> {
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+        RobotCommand::Hello.encode(&mut buf, HANDSHAKE_REQUEST_ID);
 
-        let expected_sequence = [MAGIC_HEADER, 0xFE, 0];
+        tracing::debug!("Handshaking with robot...");
+        socket.send(&buf).await?;
 
-        // Drain the stream until we find the magic header and ACK code
-        'outer: loop {
-            for value in expected_sequence {
-                if value != s.read_u8().await? {
-                    continue 'outer;
-                }
+        loop {
+            buf.clear();
+
+            socket.recv_buf_from(&mut buf).await?;
+
+            match Response::decode(&buf[..])? {
+                Response::Ack(0) => break,
+                _ => (),
             }
-
-            break;
         }
+
+        tracing::info!("Handshake successful!");
 
         Ok(())
     }
@@ -106,7 +112,7 @@ impl RobotArm {
     /* == Commands == */
 
     pub async fn execute_command(&mut self, command: RobotCommand<'_>) -> Result<()> {
-        let (ack_tx, ack_rx) = oneshot::channel();
+        let (ack_tx, ack) = oneshot::channel();
 
         let request_id = {
             let mut lock = self.inner.shared.lock().await;
@@ -115,41 +121,70 @@ impl RobotArm {
             request_id
         };
 
-        command.write_to(&mut self.socket, request_id).await?;
-        ack_rx.await.ok();
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+
+        tracing::trace!("-> {request_id}");
+        command.encode(&mut buf, request_id);
+        self.inner.socket.send(&buf).await?;
+
+        ack.await.ok();
+
         Ok(())
     }
 
-    pub async fn wait_settled(&self) {
-        let mut channel = self.inner.moving.clone();
+    pub async fn try_wait_settled(&self) -> Result<(), u16> {
+        let mut error = self.inner.error.clone();
+        let mut moving = self.inner.moving.clone();
 
-        for value in [true, false] {
-            loop {
-                if *channel.borrow() == value {
-                    break;
+        let mut i = 0;
+        let sequence = [true, false];
+
+        // Wait for a negative moving edge or an error code
+        loop {
+            select! {
+                _ = error.changed() => {
+                    if let Some(code) = *error.borrow() {
+                        return Err(code);
+                    }
                 }
 
-                channel.changed().await.unwrap();
+                _ = moving.changed() => {
+                    if *moving.borrow() == sequence[i] {
+                        i += 1;
+                    }
+
+                    if i == sequence.len() {
+                        return Ok(());
+                    }
+                }
+
+
             }
         }
     }
 
     /* == Background tasks == */
 
-    async fn robot_arm_task<R: AsyncRead + Unpin>(
+    async fn robot_arm_task(
         inner: Arc<Inner>,
+        error: watch::Sender<Option<u16>>,
         moving: watch::Sender<bool>,
         status: watch::Sender<Option<RobotStatus>>,
-        mut r: R,
     ) -> Result<()> {
+        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+
         loop {
-            match Response::read_from(&mut r).await? {
+            inner.socket.recv_buf(&mut buf).await?;
+
+            match Response::decode(&buf[..])? {
                 Response::Status(report) => {
                     moving.send(true)?;
                     status.send(Some(report))?;
                 }
 
                 Response::Ack(id) => {
+                    tracing::trace!("<- ACK {id}");
+
                     let mut lock = inner.shared.lock().await;
 
                     if let Some((_, ack)) = lock.ack.take_if(|(ack_id, _)| *ack_id == id) {
@@ -158,7 +193,8 @@ impl RobotArm {
                 }
 
                 Response::Error(code) => {
-                    tracing::error!("Error response: {}", code);
+                    tracing::warn!("Robot error (code {code})");
+                    error.send(Some(code)).ok();
                 }
 
                 Response::MotionComplete => {
@@ -170,6 +206,8 @@ impl RobotArm {
                     tracing::info!("Power off");
                 }
             }
+
+            buf.clear();
         }
     }
 }
@@ -182,13 +220,17 @@ impl Drop for RobotArm {
 
 impl Inner {
     pub fn new(
+        error: watch::Receiver<Option<u16>>,
         moving: watch::Receiver<bool>,
         status: watch::Receiver<Option<RobotStatus>>,
+        socket: UdpSocket,
     ) -> Self {
         Inner {
+            error,
             moving,
             shared: Mutex::new(Shared::default()),
             status,
+            socket,
         }
     }
 }
@@ -250,54 +292,49 @@ impl From<&Motion<'_>> for MotionType {
 /* == Command == */
 
 impl RobotCommand<'_> {
-    async fn write_to<W: AsyncWrite + Unpin>(&self, w: &mut W, request_id: u8) -> io::Result<()> {
-        w.write_u8(MAGIC_HEADER).await?;
-        w.write_u8(request_id).await?;
+    fn encode<B: BufMut>(&self, b: &mut B, request_id: u8) {
+        b.put_u8(MAGIC_HEADER);
+        b.put_u8(request_id);
 
         match self {
             RobotCommand::Hello => {
-                w.write_u8(0x00).await?;
+                b.put_u8(0x00);
             }
 
             RobotCommand::Halt { return_home } => {
-                w.write_u8(0x01).await?;
-                w.write_u8(*return_home as u8).await?;
+                b.put_u8(0x01);
+                b.put_u8(*return_home as u8);
             }
 
             RobotCommand::Move(motion) => {
-                w.write_u8(0x02 + MotionType::from(motion) as u8).await?;
+                b.put_u8(0x02 + MotionType::from(motion).id());
 
                 match motion {
-                    Motion::Linear(point) | Motion::Direct(point) => {
-                        write_sized_value(w, point).await?;
-                    }
-
-                    Motion::Joint(joint) => write_sized_value(w, joint).await?,
+                    Motion::Linear(point) | Motion::Direct(point) => put_value(b, point),
+                    Motion::Joint(joint) => put_value(b, joint),
                 }
             }
 
             RobotCommand::SetSpeedProfile(profile) => {
-                w.write_u8(0x05).await?;
-                write_sized_value(w, profile).await?;
+                b.put_u8(0x05);
+                put_value(b, profile);
             }
 
             RobotCommand::SetToolOffset(offset) => {
-                w.write_u8(0x06).await?;
-                write_sized_value(w, offset).await?;
+                b.put_u8(0x06);
+                put_value(b, offset);
             }
 
             RobotCommand::SetReportInterval(interval_s) => {
-                w.write_u8(0x07).await?;
-                w.write_f32_le(*interval_s).await?;
+                b.put_u8(0x07);
+                b.put_f32(*interval_s);
             }
 
             RobotCommand::ReturnHome(motion_type) => {
-                w.write_u8(0x08).await?;
-                w.write_u8(*motion_type as u8).await?;
+                b.put_u8(0x08);
+                b.put_u8(*motion_type as u8);
             }
         };
-
-        Ok(())
     }
 }
 
@@ -334,22 +371,37 @@ impl RobotController {
             .await
     }
 
-    pub async fn wait_settled(&self) {
-        self.0.wait_settled().await
+    pub async fn wait_settled(&self) -> Result<()> {
+        self.0
+            .try_wait_settled()
+            .await
+            .map_err(|code| eyre!("Robot error (code {code})"))
+    }
+}
+
+impl MotionType {
+    pub fn id(&self) -> u8 {
+        match self {
+            MotionType::Linear => 0,
+            MotionType::Direct => 1,
+            MotionType::Joint => 2,
+        }
     }
 }
 
 /* == Response == */
 
 impl Response {
-    async fn read_from<R: AsyncRead + Unpin>(r: &mut R) -> Result<Response> {
-        if r.read_u8().await? != MAGIC_HEADER {
+    fn decode<B: Buf>(mut buf: B) -> Result<Response> {
+        let buf = &mut buf;
+
+        if buf.get_u8() != MAGIC_HEADER {
             bail!("Missing magic header");
         }
 
-        match r.read_u8().await? {
+        match buf.get_u8() {
             0x01 => {
-                let status = read_sized_value(r).await?;
+                let status = get_value(buf).unwrap();
                 Ok(Response::Status(status))
             }
 
@@ -357,12 +409,12 @@ impl Response {
             0x03 => Ok(Response::PowerOff),
 
             0xFE => {
-                let id = r.read_u8().await?;
+                let id = buf.get_u8();
                 Ok(Response::Ack(id))
             }
 
             0xFF => {
-                let error = r.read_u16_le().await?;
+                let error = buf.get_u16();
                 Ok(Response::Error(error))
             }
 
@@ -378,29 +430,15 @@ impl Response {
 
 fn binary_config() -> impl bincode::config::Config {
     bincode::config::standard()
-        .with_little_endian()
+        .with_big_endian()
         .with_fixed_int_encoding()
 }
 
-async fn read_sized_value<T, R>(r: &mut R) -> Result<T>
-where
-    T: Decode<()>,
-    R: AsyncRead + Unpin,
-{
-    let mut buf = vec![0u8; mem::size_of::<T>()];
-    r.read_exact(&mut buf).await?;
-
-    let (value, _) = bincode::decode_from_slice(&buf, binary_config())?;
+fn get_value<B: Buf, T: Decode<()>>(buf: &mut B) -> Result<T> {
+    let value = bincode::decode_from_std_read(&mut buf.reader(), binary_config())?;
     Ok(value)
 }
 
-pub async fn write_sized_value<T, W>(w: &mut W, value: &T) -> io::Result<()>
-where
-    T: Encode,
-    W: AsyncWrite + Unpin,
-{
-    let buf = bincode::encode_to_vec(value, binary_config()).unwrap();
-    w.write_all(&buf).await?;
-
-    Ok(())
+fn put_value<B: BufMut, T: Encode>(buf: &mut B, value: &T) {
+    bincode::encode_into_std_write(value, &mut buf.writer(), binary_config()).unwrap();
 }

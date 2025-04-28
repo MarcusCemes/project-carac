@@ -16,7 +16,7 @@
   elements[4] = value.trsf.ry
   elements[5] = value.trsf.rz
 
-  toBinary(elements, 6, "4.0l", buffer)
+  toBinary(elements, 6, "4.0b", buffer)
 end
 ]]></Code>
   </Program>

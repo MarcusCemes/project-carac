@@ -3,6 +3,7 @@ use std::io;
 use eyre::Result;
 
 use orchestrator::cli::run;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
@@ -13,8 +14,12 @@ async fn main() -> Result<()> {
 fn init() -> Result<()> {
     color_eyre::install()?;
 
+    let env_filter = EnvFilter::builder()
+        .with_default_directive("orchestrator=debug".parse()?)
+        .from_env_lossy();
+
     tracing_subscriber::fmt()
-        .with_env_filter("orchestrator=debug")
+        .with_env_filter(env_filter)
         .with_writer(io::stderr)
         .init();
 

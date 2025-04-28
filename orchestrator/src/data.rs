@@ -110,15 +110,15 @@ impl<'a> SegmentedRecordingIterator<'a> {
     }
 
     pub fn next(&mut self, buf: &mut Vec<f32>) -> Option<f32> {
-        let time = self.time_iterator.next()?;
+        let time_s = self.time_iterator.next()?;
 
         buf.clear();
 
         for interpolator in &mut self.interpolators {
-            buf.extend_from_slice(interpolator.next(time));
+            buf.extend_from_slice(interpolator.next(time_s));
         }
 
-        Some(time)
+        Some(time_s)
     }
 
     pub fn definitions(&self) -> &[&StreamDefinition] {

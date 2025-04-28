@@ -13,7 +13,7 @@
   buffer[1] = 255
   buffer[2] = code
 
-  toBinary(argument, 1, "2l", buffer[3])
+  toBinary(argument, 1, "2b", buffer[3])
 
   sioSet(socket, buffer)
 end

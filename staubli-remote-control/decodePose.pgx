@@ -9,7 +9,7 @@
       <Local name="decodeBuffer" type="num" xsi:type="array" size="6" />
     </Locals>
     <Code><![CDATA[begin
-  fromBinary(buffer, 24, "4.0l", decodeBuffer)
+  fromBinary(buffer, 24, "4.0b", decodeBuffer)
 
   value = {decodeBuffer[0], decodeBuffer[1], decodeBuffer[2], decodeBuffer[3], decodeBuffer[4], decodeBuffer[5]}
 
