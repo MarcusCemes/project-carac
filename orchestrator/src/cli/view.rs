@@ -6,7 +6,7 @@ use eyre::Result;
 use crate::recording::Recording;
 
 pub fn display_data() -> Result<()> {
-    let recording = Recording::decode(&mut io::stdin())?;
+    let recording = Recording::decode_reader(&mut io::stdin())?;
 
     let start = DateTime::from_timestamp_micros(recording.start_timestamp_us).unwrap();
     let n_streams = recording.recorded_streams.len();

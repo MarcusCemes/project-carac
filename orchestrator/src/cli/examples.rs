@@ -41,7 +41,7 @@ pub async fn counter() -> Result<()> {
     sink.set_record(false);
 
     let recording = sink.complete().await;
-    recording.encode(&mut io::stdout())?;
+    recording.encode_writer(&mut io::stdout())?;
 
     Ok(())
 }

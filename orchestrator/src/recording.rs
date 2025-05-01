@@ -7,11 +7,11 @@ use std::{
     },
 };
 
-use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
 use chrono::{DateTime, Utc};
 use chunked_bytes::ChunkedBytes;
-use eyre::{bail, Context, Result};
+use eyre::{bail, eyre, Result};
+use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{Mutex, MutexGuard},
     time::Instant,
@@ -19,11 +19,14 @@ use tokio::{
 
 use crate::{
     data::SegmentedRecordingIterator,
-    misc::{compact_config, plot_juggler::PlotJugglerBroadcaster},
+    misc::{
+        buf::{BufExt, BufMutExt},
+        plot_juggler::PlotJugglerBroadcaster,
+    },
 };
 
 const MAGIC_NUMBER: u32 = u32::from_be_bytes(*b"RCDG");
-const FORMAT_VERSION: u8 = 1;
+const FORMAT_VERSION: u8 = 2;
 
 #[derive(Default)]
 pub struct Sink {
@@ -35,7 +38,7 @@ pub struct StreamWriter {
     inner: Arc<Inner>,
 }
 
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StreamDefinition {
     pub name: String,
     pub channels: Vec<String>,
@@ -53,10 +56,17 @@ struct Inner {
 }
 
 struct InnerShared {
+    markers: Vec<Marker>,
     plot_juggler: Option<PlotJugglerBroadcaster>,
     reference_instant: Instant,
     reference_time: DateTime<Utc>,
     streams: Vec<Stream>,
+}
+
+struct Marker {
+    duration: u32,
+    name: String,
+    time_us: u32,
 }
 
 impl Sink {
@@ -83,9 +93,17 @@ impl Sink {
         })
     }
 
+    pub async fn add_stream_static<const N: usize>(
+        &self,
+        name: &str,
+        channels: [&str; N],
+    ) -> Result<StreamWriter> {
+        self.add_stream(name.to_owned(), channels.map(str::to_owned).to_vec())
+            .await
+    }
+
     pub async fn remove_stream(&self, name: &str) -> bool {
         let mut lock = self.inner.shared.lock().await;
-
         let maybe_stream = lock.find_stream_with_name(name);
 
         if let Some(i) = maybe_stream {
@@ -93,6 +111,11 @@ impl Sink {
         }
 
         maybe_stream.is_some()
+    }
+
+    pub async fn has_stream(&self, name: &str) -> bool {
+        let lock = self.inner.shared.lock().await;
+        lock.streams.iter().any(|s| s.definition.name == name)
     }
 
     /* == Recording == */
@@ -202,6 +225,7 @@ impl InnerShared {
 impl Default for InnerShared {
     fn default() -> Self {
         Self {
+            markers: Vec::new(),
             plot_juggler: None,
             reference_instant: Instant::now(),
             reference_time: Utc::now(),
@@ -283,13 +307,13 @@ impl StreamBuffer {
 
 /* == Recording == */
 
-#[derive(Clone, Decode, Encode)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Recording {
     pub start_timestamp_us: i64,
     pub recorded_streams: Vec<RecordedStream>,
 }
 
-#[derive(Clone, Decode, Encode)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct RecordedStream {
     pub definition: StreamDefinition,
     pub data_timestamps_us: Vec<u32>,
@@ -317,16 +341,27 @@ impl Recording {
 
     /* == Encoding & decoding == */
 
-    pub fn decode<R: Read>(reader: &mut R) -> Result<Self> {
-        bincode::decode_from_std_read(reader, compact_config())
-            .wrap_err("Failed to decode recording")
+    pub fn decode<B: Buf>(buf: &mut B) -> Result<Self> {
+        RecordingDecoder::new()
+            .decode(buf)
+            .ok_or_else(|| eyre!("Failed to decode recording"))
     }
 
-    pub fn encode<W: Write>(&self, writer: &mut W) -> Result<()> {
-        bincode::encode_into_std_write(self, writer, compact_config())
-            .wrap_err("Failed to encode recording")?;
+    pub fn decode_reader<R: Read>(reader: &mut R) -> Result<Self> {
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf)?;
+        Self::decode(&mut &buf[..])
+    }
 
+    pub fn encode_writer<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let mut buf = Vec::new();
+        self.encode(&mut buf);
+        writer.write_all(&buf)?;
         Ok(())
+    }
+
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
+        RecordingEncoder(self).encode(buf);
     }
 }
 
@@ -353,5 +388,205 @@ impl RecordedStream {
 impl RecordedSample<'_> {
     pub fn timestamp_s(&self) -> f32 {
         1e-6 * self.recording_timestamp_us as f32
+    }
+}
+
+/* == Encoding/Decoding == */
+
+struct RecordingEncoder<'a>(&'a Recording);
+
+impl RecordingEncoder<'_> {
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
+        buf.put_u32(MAGIC_NUMBER);
+        buf.put_u8(FORMAT_VERSION);
+        buf.put_i64(self.0.start_timestamp_us);
+
+        self.encode_definitions(buf);
+        self.encode_timestamps(buf);
+        self.encode_data(buf);
+    }
+
+    fn encode_definitions<B: BufMut>(&self, buf: &mut B) {
+        buf.put_u8(self.0.recorded_streams.len() as u8);
+
+        for RecordedStream { definition, .. } in &self.0.recorded_streams {
+            buf.put_string(&definition.name);
+            buf.put_u8(definition.n_channels() as u8);
+
+            for channel in &definition.channels {
+                buf.put_string(channel);
+            }
+        }
+    }
+
+    fn encode_timestamps<B: BufMut>(&self, buf: &mut B) {
+        for RecordedStream {
+            data_timestamps_us: timestamps,
+            ..
+        } in &self.0.recorded_streams
+        {
+            buf.put_u8(timestamps.len() as u8);
+
+            for timestamp in timestamps {
+                buf.put_u32(*timestamp);
+            }
+        }
+    }
+
+    fn encode_data<B: BufMut>(&self, buf: &mut B) {
+        for stream in &self.0.recorded_streams {
+            for datum in &stream.data {
+                buf.put_f32(*datum);
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct RecordingDecoder {
+    definitions: Vec<StreamDefinition>,
+    timestamps: Vec<Vec<u32>>,
+    data: Vec<Vec<f32>>,
+    start_timestamp_us: i64,
+}
+
+impl RecordingDecoder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn decode<B: Buf>(mut self, buf: &mut B) -> Option<Recording> {
+        if buf.try_get_u32().ok()? != MAGIC_NUMBER {
+            return None;
+        }
+
+        if buf.try_get_u8().ok()? != FORMAT_VERSION {
+            return None;
+        }
+
+        self.start_timestamp_us = buf.try_get_i64().ok()?;
+
+        self.decode_definitions(buf)?;
+        self.decode_timestamps(buf)?;
+        self.decode_data(buf)?;
+
+        Some(self.finalise())
+    }
+
+    fn decode_definitions<B: Buf>(&mut self, buf: &mut B) -> Option<()> {
+        for _ in 0..buf.try_get_u8().ok()? {
+            let name = buf.try_get_string()?;
+
+            let channels = (0..buf.try_get_u8().ok()?)
+                .map(|_| buf.try_get_string())
+                .collect::<Option<_>>()?;
+
+            self.definitions.push(StreamDefinition { name, channels });
+        }
+
+        Some(())
+    }
+
+    fn decode_timestamps<B: Buf>(&mut self, buf: &mut B) -> Option<()> {
+        for _ in 0..self.definitions.len() {
+            let size = buf.try_get_u8().ok()? as usize;
+            let mut stream_timestamps = Vec::with_capacity(size);
+
+            for _ in 0..size {
+                stream_timestamps.push(buf.try_get_u32().ok()?);
+            }
+
+            self.timestamps.push(stream_timestamps);
+        }
+
+        Some(())
+    }
+
+    fn decode_data<B: Buf>(&mut self, buf: &mut B) -> Option<()> {
+        for (definition, timestamps) in self.definitions.iter().zip(self.timestamps.iter()) {
+            let size = timestamps.len() as usize * definition.n_channels();
+            let mut stream_data = Vec::with_capacity(size);
+
+            for _ in 0..size {
+                stream_data.push(buf.try_get_f32().ok()?);
+            }
+
+            self.data.push(stream_data);
+        }
+
+        Some(())
+    }
+
+    fn finalise(self) -> Recording {
+        let mut recorded_streams = Vec::with_capacity(self.definitions.len());
+
+        self.definitions
+            .into_iter()
+            .zip(self.data.into_iter())
+            .zip(self.timestamps.into_iter())
+            .for_each(|((definition, data), data_timestamps_us)| {
+                recorded_streams.push(RecordedStream {
+                    definition,
+                    data_timestamps_us,
+                    data,
+                });
+            });
+
+        let start_timestamp_us = self.start_timestamp_us;
+
+        Recording {
+            start_timestamp_us,
+            recorded_streams,
+        }
+    }
+}
+
+//     for stream in streams {
+//         for sample in stream.iter_samples() {
+//             for channel in sample.channel_data {
+//                 buf.put_f32(*channel);
+//             }
+//         }
+//     }
+// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_decode_recording() {
+        let recording = Recording {
+            start_timestamp_us: 123456789,
+            recorded_streams: vec![
+                RecordedStream {
+                    definition: StreamDefinition {
+                        name: "TestStream".to_string(),
+                        channels: vec!["Channel1".to_string(), "Channel2".to_string()],
+                    },
+                    data_timestamps_us: vec![1, 2, 3],
+                    data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                },
+                RecordedStream {
+                    definition: StreamDefinition {
+                        name: "AnotherStream".to_string(),
+                        channels: vec!["ChannelA".to_string(), "ChannelB".to_string()],
+                    },
+                    data_timestamps_us: vec![4, 5, 6],
+                    data: vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                },
+            ],
+        };
+
+        let mut buf = Vec::new();
+        recording.encode(&mut buf);
+
+        let decoded_recording = Recording::decode(&mut buf.as_slice()).unwrap();
+
+        // Compare the JSON representation for equality (key ordering is stable)
+        assert_eq!(
+            serde_json::to_string(&recording).unwrap(),
+            serde_json::to_string(&decoded_recording).unwrap()
+        );
     }
 }

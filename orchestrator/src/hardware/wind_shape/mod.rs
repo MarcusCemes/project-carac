@@ -6,8 +6,10 @@ use std::{
     time::Duration,
 };
 
-use eyre::{eyre, Result};
+use eyre::{eyre, Context, Result};
 use tokio::{io, net::UdpSocket, select, sync::watch, task::JoinSet, time::interval};
+
+use crate::config::WindShapeConfig;
 
 const MODULE_COUNT: usize = 56;
 const MODULE_FANS: usize = 18;
@@ -66,6 +68,10 @@ enum ResponsePayload {
 }
 
 impl WindShape {
+    pub async fn connect_from_config(config: &WindShapeConfig) -> Result<Self> {
+        Self::connect(config.ip).await
+    }
+
     pub async fn connect(ip: IpAddr) -> Result<WindShape> {
         let link = Link::connect(ip).await;
 
@@ -94,27 +100,27 @@ impl WindShape {
     /* == Public API == */
 
     pub async fn request_control(&mut self) {
-        self.update_control(true).await;
+        self.update_control(true).await
     }
 
     pub async fn release_control(&mut self) {
-        self.update_control(false).await;
+        self.update_control(false).await
     }
 
-    pub async fn enable_power(&mut self) {
+    pub async fn enable_power(&mut self) -> Result<()> {
         self.config.enable_power = true;
-        self.send_module_state().await;
+        self.send_module_state().await
     }
 
-    pub async fn disable_power(&mut self) {
+    pub async fn disable_power(&mut self) -> Result<()> {
         self.config.enable_power = false;
         self.config.fan_speed = 0;
-        self.send_module_state().await;
+        self.send_module_state().await
     }
 
-    pub async fn set_fan_speed(&mut self, fan_speed: u8) {
+    pub async fn set_fan_speed(&mut self, fan_speed: u8) -> Result<()> {
         self.config.fan_speed = fan_speed;
-        self.send_module_state().await;
+        self.send_module_state().await
     }
 
     async fn update_control(&mut self, value: bool) {
@@ -133,7 +139,7 @@ impl WindShape {
 
     /* == Socket == */
 
-    async fn send_module_state(&self) {
+    async fn send_module_state(&self) -> Result<()> {
         let request = Request::Module {
             enable_power: self.config.enable_power,
             fan_speed: self.config.fan_speed,
@@ -142,7 +148,7 @@ impl WindShape {
         self.link
             .send_request(request, self.client_id)
             .await
-            .expect("WindShape socket closed");
+            .wrap_err("Failed to send module state")
     }
 
     /* == Background tasks == */

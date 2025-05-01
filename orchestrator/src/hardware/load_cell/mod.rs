@@ -4,13 +4,17 @@ use std::{
     sync::Arc,
 };
 
-use bincode::{config, error::DecodeError, Decode, Encode};
+use bincode::{error::DecodeError, Decode, Encode};
 use eyre::{Context, Result};
 use reqwest::get;
 use serde::Deserialize;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recording::{Sink, StreamWriter};
+use crate::{
+    config::LoadCellConfig,
+    misc::network_config,
+    recording::{Sink, StreamWriter},
+};
 
 const DEFAULT_IP: &str = "192.168.1.1";
 const PORT: u16 = 49152;
@@ -28,7 +32,7 @@ pub struct LoadCell {
 }
 
 struct LoadCellInner {
-    config: LoadCellConfig,
+    config: DeviceConfig,
     link: Link,
     stream: Mutex<Option<StreamWriter>>,
 }
@@ -56,7 +60,7 @@ struct Command {
 }
 
 #[derive(Deserialize)]
-struct LoadCellConfig {
+struct DeviceConfig {
     #[serde(rename = "scalfu")]
     force_unit: String,
     #[serde(rename = "scaltu")]
@@ -77,10 +81,15 @@ struct LoadCellConfig {
 }
 
 impl LoadCell {
+    pub async fn connect_from_config(config: &LoadCellConfig) -> Result<Self> {
+        Self::connect(config.ip).await
+    }
+
     pub async fn connect(ip: IpAddr) -> Result<Self> {
         let config = Self::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+
         socket.connect((ip, PORT)).await?;
 
         let inner = Arc::new(LoadCellInner {
@@ -115,14 +124,14 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    async fn fetch_config(ip: IpAddr) -> Result<LoadCellConfig> {
+    async fn fetch_config(ip: IpAddr) -> Result<DeviceConfig> {
         let xml_str = get(&format!("http://{ip}/netftcalapi.xml"))
             .await?
             .text()
             .await?;
 
         // Deserialize with serde and quick_xml
-        let config: LoadCellConfig =
+        let config: DeviceConfig =
             quick_xml::de::from_str(&xml_str).wrap_err("Failed to parse XML config")?;
 
         if config.force_unit != "N" {
@@ -138,8 +147,6 @@ impl LoadCell {
 
     #[tracing::instrument(skip(inner))]
     async fn load_cell_task(inner: Arc<LoadCellInner>) -> Result<(), TaskError> {
-        tracing::debug!("Receiver started");
-
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
@@ -193,7 +200,7 @@ impl Command {
 
     fn encode(&self) -> [u8; 8] {
         let mut buf = [0; mem::size_of::<Command>()];
-        bincode::encode_into_slice(self, &mut buf, binary_config()).unwrap();
+        bincode::encode_into_slice(self, &mut buf, network_config()).unwrap();
         buf
     }
 }
@@ -215,7 +222,7 @@ struct Message {
 }
 
 impl Message {
-    fn data(&self, config: &LoadCellConfig) -> Data {
+    fn data(&self, config: &DeviceConfig) -> Data {
         let [fx, fy, fz] = [self.fx, self.fy, self.fz].map(|x| x as f32 / config.force_counts);
         let [tx, ty, tz] = [self.tx, self.ty, self.tz].map(|x| x as f32 / config.torque_counts);
         [fx, fy, fz, tx, ty, tz]
@@ -223,16 +230,10 @@ impl Message {
 }
 
 fn parse_message(buf: &[u8]) -> Result<Message, DecodeError> {
-    Ok(bincode::decode_from_slice(buf, binary_config())?.0)
+    Ok(bincode::decode_from_slice(buf, network_config())?.0)
 }
 
 /* == Utils == */
-
-fn binary_config() -> impl config::Config {
-    config::standard()
-        .with_big_endian()
-        .with_fixed_int_encoding()
-}
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Self {

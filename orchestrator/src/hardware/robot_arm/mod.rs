@@ -6,7 +6,8 @@ use std::{
 
 use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
-use eyre::{bail, eyre, Result};
+use eyre::{bail, eyre, Report, Result};
+use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
     select,
@@ -14,7 +15,17 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{defs::*, recording::StreamWriter};
+use crate::{
+    config::RobotArmConfig,
+    defs::*,
+    misc::network_config,
+    recording::{Sink, StreamWriter},
+};
+
+use super::Hardware;
+
+const NAME: &str = "robot_arm";
+const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
 
 const BUFFER_SIZE: usize = 1024;
 const HANDSHAKE_REQUEST_ID: u8 = 0;
@@ -26,11 +37,11 @@ pub struct RobotArm {
 }
 
 struct Inner {
-    error: watch::Receiver<Option<u16>>,
-    moving: watch::Receiver<bool>,
+    error: watch::Sender<Option<u16>>,
+    moving: watch::Sender<bool>,
+    pose: watch::Sender<Option<Pose>>,
     shared: Mutex<Shared>,
     socket: UdpSocket,
-    status: watch::Receiver<Option<RobotStatus>>,
 }
 
 #[derive(Default)]
@@ -56,26 +67,38 @@ struct RobotStatus {
 }
 
 impl RobotArm {
+    pub async fn connect_from_config(config: &RobotArmConfig) -> Result<Self> {
+        Self::connect(config.ip, config.port).await
+    }
+
     pub async fn connect(ip: IpAddr, port: u16) -> Result<RobotArm> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
         socket.connect((ip, port)).await?;
 
         Self::handshake(&socket).await?;
 
-        let (error_tx, error_rx) = watch::channel(None);
-        let (moving_tx, moving_rx) = watch::channel(false);
-        let (status_tx, status_rx) = watch::channel(None);
+        let (error, _) = watch::channel(None);
+        let (moving, _) = watch::channel(false);
+        let (status, _) = watch::channel(None);
 
-        let inner = Arc::new(Inner::new(error_rx, moving_rx, status_rx, socket));
-
-        let task = tokio::spawn(Self::robot_arm_task(
-            inner.clone(),
-            error_tx,
-            moving_tx,
-            status_tx,
+        let inner = Arc::new(Inner::new(
+            error.clone(),
+            moving.clone(),
+            status.clone(),
+            socket,
         ));
 
+        let task = tokio::spawn(Self::robot_arm_task(inner.clone()));
+
         Ok(RobotArm { inner, task })
+    }
+
+    pub async fn register(&self, sink: &Sink) -> Result<()> {
+        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let stream = sink.add_stream(NAME.to_owned(), channels).await?;
+
+        self.inner.shared.lock().await.stream = Some(stream);
+        Ok(())
     }
 
     async fn handshake(socket: &UdpSocket) -> Result<()> {
@@ -90,14 +113,12 @@ impl RobotArm {
 
             socket.recv_buf_from(&mut buf).await?;
 
-            match Response::decode(&buf[..])? {
-                Response::Ack(0) => break,
-                _ => (),
+            if let Response::Ack(0) = Response::decode(&buf[..])? {
+                break;
             }
         }
 
         tracing::info!("Handshake successful!");
-
         Ok(())
     }
 
@@ -111,7 +132,7 @@ impl RobotArm {
 
     /* == Commands == */
 
-    pub async fn execute_command(&mut self, command: RobotCommand<'_>) -> Result<()> {
+    pub async fn execute_command(&mut self, command: RobotCommand) -> Result<()> {
         let (ack_tx, ack) = oneshot::channel();
 
         let request_id = {
@@ -133,44 +154,27 @@ impl RobotArm {
     }
 
     pub async fn try_wait_settled(&self) -> Result<(), u16> {
-        let mut error = self.inner.error.clone();
-        let mut moving = self.inner.moving.clone();
+        let mut error = self.inner.error.subscribe();
+        let mut moving = self.inner.moving.subscribe();
 
-        let mut i = 0;
-        let sequence = [true, false];
+        let error_task = error.wait_for(Option::is_some);
 
-        // Wait for a negative moving edge or an error code
-        loop {
-            select! {
-                _ = error.changed() => {
-                    if let Some(code) = *error.borrow() {
-                        return Err(code);
-                    }
-                }
+        let moving_task = async {
+            moving.wait_for(|m| *m).await?;
+            moving.wait_for(|m| !*m).await?;
+            Result::<(), watch::error::RecvError>::Ok(())
+        };
 
-                _ = moving.changed() => {
-                    if *moving.borrow() == sequence[i] {
-                        i += 1;
-                    }
-
-                    if i == sequence.len() {
-                        return Ok(());
-                    }
-                }
-
-
-            }
+        // Race the error and negative moving edge, whichever comes first
+        select! {
+            Ok(code) = error_task => Err(code.unwrap()),
+            _ = moving_task => Ok(()),
         }
     }
 
     /* == Background tasks == */
 
-    async fn robot_arm_task(
-        inner: Arc<Inner>,
-        error: watch::Sender<Option<u16>>,
-        moving: watch::Sender<bool>,
-        status: watch::Sender<Option<RobotStatus>>,
-    ) -> Result<()> {
+    async fn robot_arm_task(inner: Arc<Inner>) -> Result<()> {
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
@@ -178,28 +182,27 @@ impl RobotArm {
 
             match Response::decode(&buf[..])? {
                 Response::Status(report) => {
-                    moving.send(true)?;
-                    status.send(Some(report))?;
+                    inner.moving.send_replace(true);
+                    inner.pose.send_replace(Some(Pose::from(report.position)));
                 }
 
                 Response::Ack(id) => {
                     tracing::trace!("<- ACK {id}");
-
                     let mut lock = inner.shared.lock().await;
 
-                    if let Some((_, ack)) = lock.ack.take_if(|(ack_id, _)| *ack_id == id) {
-                        ack.send(()).ok();
-                    }
+                    lock.ack
+                        .take_if(|(ack_id, _)| *ack_id == id)
+                        .and_then(|(_, ack)| ack.send(()).ok());
                 }
 
                 Response::Error(code) => {
                     tracing::warn!("Robot error (code {code})");
-                    error.send(Some(code)).ok();
+                    inner.error.send(Some(code)).ok();
                 }
 
                 Response::MotionComplete => {
-                    tracing::info!("Motion complete");
-                    moving.send(false)?;
+                    tracing::debug!("Motion complete");
+                    inner.moving.send(false).ok();
                 }
 
                 Response::PowerOff => {
@@ -212,6 +215,40 @@ impl RobotArm {
     }
 }
 
+impl Hardware for RobotArm {
+    async fn errored(&mut self) -> Option<Report> {
+        self.inner
+            .error
+            .borrow()
+            .map(|code| eyre!("Robot error (code {code})"))
+    }
+
+    async fn on_record(&mut self) {
+        let lock = self.inner.shared.lock().await;
+
+        let maybe_pose = self.inner.pose.borrow();
+        let maybe_stream = lock.stream.as_ref();
+        let combined_option = maybe_stream.zip(maybe_pose.as_ref());
+
+        if let Some((
+            stream,
+            Pose {
+                position: p,
+                orientation: o,
+            },
+        )) = combined_option
+        {
+            stream
+                .write_now(&[p[0], p[1], p[2], o.1[0], o.1[1], o.1[2], o.0])
+                .await;
+        }
+    }
+
+    async fn reset(&mut self) {
+        self.inner.error.send_replace(None);
+    }
+}
+
 impl Drop for RobotArm {
     fn drop(&mut self) {
         self.task.abort();
@@ -220,16 +257,16 @@ impl Drop for RobotArm {
 
 impl Inner {
     pub fn new(
-        error: watch::Receiver<Option<u16>>,
-        moving: watch::Receiver<bool>,
-        status: watch::Receiver<Option<RobotStatus>>,
+        error: watch::Sender<Option<u16>>,
+        moving: watch::Sender<bool>,
+        pose: watch::Sender<Option<Pose>>,
         socket: UdpSocket,
     ) -> Self {
         Inner {
             error,
             moving,
+            pose,
             shared: Mutex::new(Shared::default()),
-            status,
             socket,
         }
     }
@@ -244,21 +281,21 @@ impl Shared {
 
 /* == Command == */
 
-pub enum RobotCommand<'a> {
+pub enum RobotCommand {
     Halt { return_home: bool },
     Hello,
-    Move(Motion<'a>),
+    Move(Motion),
     ReturnHome(MotionType),
     SetReportInterval(f32),
-    SetSpeedProfile(&'a SpeedProfile),
-    SetToolOffset(&'a Point),
+    SetSpeedProfile(SpeedProfile),
+    SetToolOffset(Point),
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum Motion<'a> {
-    Direct(&'a Point),
-    Joint(&'a Joint),
-    Linear(&'a Point),
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub enum Motion {
+    Direct(Point),
+    Joint(Joint),
+    Linear(Point),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -268,7 +305,7 @@ pub enum MotionType {
     Linear,
 }
 
-#[derive(Encode)]
+#[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
 pub struct SpeedProfile {
     pub translation_limit: f32,
     pub rotation_limit: f32,
@@ -279,7 +316,7 @@ pub struct SpeedProfile {
 
 const SPEED_PROFILE_SIZE: usize = mem::size_of::<SpeedProfile>();
 
-impl From<&Motion<'_>> for MotionType {
+impl From<&Motion> for MotionType {
     fn from(value: &Motion) -> Self {
         match value {
             Motion::Direct(_) => MotionType::Direct,
@@ -291,7 +328,7 @@ impl From<&Motion<'_>> for MotionType {
 
 /* == Command == */
 
-impl RobotCommand<'_> {
+impl RobotCommand {
     fn encode<B: BufMut>(&self, b: &mut B, request_id: u8) {
         b.put_u8(MAGIC_HEADER);
         b.put_u8(request_id);
@@ -343,17 +380,17 @@ impl RobotCommand<'_> {
 pub struct RobotController(RobotArm);
 
 impl RobotController {
-    pub async fn move_to(&mut self, motion: Motion<'_>) -> Result<()> {
+    pub async fn move_to(&mut self, motion: Motion) -> Result<()> {
         self.0.execute_command(RobotCommand::Move(motion)).await
     }
 
-    pub async fn set_offset(&mut self, offset: &Point) -> Result<()> {
+    pub async fn set_offset(&mut self, offset: Point) -> Result<()> {
         self.0
             .execute_command(RobotCommand::SetToolOffset(offset))
             .await
     }
 
-    pub async fn set_profile(&mut self, profile: &SpeedProfile) -> Result<()> {
+    pub async fn set_profile(&mut self, profile: SpeedProfile) -> Result<()> {
         self.0
             .execute_command(RobotCommand::SetSpeedProfile(profile))
             .await
@@ -399,46 +436,42 @@ impl Response {
             bail!("Missing magic header");
         }
 
-        match buf.get_u8() {
+        let response = match buf.get_u8() {
             0x01 => {
                 let status = get_value(buf).unwrap();
-                Ok(Response::Status(status))
+                Response::Status(status)
             }
 
-            0x02 => Ok(Response::MotionComplete),
-            0x03 => Ok(Response::PowerOff),
+            0x02 => Response::MotionComplete,
+            0x03 => Response::PowerOff,
 
             0xFE => {
                 let id = buf.get_u8();
-                Ok(Response::Ack(id))
+                Response::Ack(id)
             }
 
             0xFF => {
                 let error = buf.get_u16();
-                Ok(Response::Error(error))
+                Response::Error(error)
             }
 
             code => {
                 tracing::error!("Unsupported code: {code:02x}");
                 bail!("Unsupported code: {code:02x}");
             }
-        }
+        };
+
+        Ok(response)
     }
 }
 
 /* == Protocol == */
 
-fn binary_config() -> impl bincode::config::Config {
-    bincode::config::standard()
-        .with_big_endian()
-        .with_fixed_int_encoding()
-}
-
 fn get_value<B: Buf, T: Decode<()>>(buf: &mut B) -> Result<T> {
-    let value = bincode::decode_from_std_read(&mut buf.reader(), binary_config())?;
+    let value = bincode::decode_from_std_read(&mut buf.reader(), network_config())?;
     Ok(value)
 }
 
 fn put_value<B: BufMut, T: Encode>(buf: &mut B, value: &T) {
-    bincode::encode_into_std_write(value, &mut buf.writer(), binary_config()).unwrap();
+    bincode::encode_into_std_write(value, &mut buf.writer(), network_config()).unwrap();
 }

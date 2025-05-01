@@ -8,17 +8,20 @@ use eyre::{bail, Result};
 use protocol::RigidBodyData;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
-use crate::recording::{Sink, StreamWriter};
+use crate::{
+    config::MotionCaptureConfig,
+    recording::{Sink, StreamWriter},
+};
 
 pub mod protocol;
 
 const COMMAND_PORT: u16 = 1510;
 const DATA_PORT: u16 = 1511;
 
-const BUFFER_SIZE: usize = 16384; // 8KB
+const BUFFER_SIZE: usize = 16384; // 16 KB
 
 const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
-const STREAM_NAME: &str = "motion_capture";
+const NAME: &str = "motion_capture";
 
 type Data = [f32; CHANNELS.len()];
 
@@ -45,7 +48,11 @@ enum TaskError {
 }
 
 impl MotionCapture {
-    pub async fn connect(ip: IpAddr, multicast_ip: Ipv4Addr) -> Result<MotionCapture> {
+    pub async fn connect_from_config(config: &MotionCaptureConfig) -> Result<Self> {
+        Self::connect(config.ip, config.multicast_ip).await
+    }
+
+    pub async fn connect(ip: IpAddr, multicast_ip: Ipv4Addr) -> Result<Self> {
         let description = {
             let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
             socket.connect((ip, COMMAND_PORT)).await?;
@@ -71,7 +78,7 @@ impl MotionCapture {
     pub async fn subscribe(&self, name: &str, sink: &Sink) -> Result<()> {
         let description_lock = self.inner.description.lock().await;
 
-        let Some(rigid_body) = description_lock.get_rb(name) else {
+        let Some(rigid_body) = description_lock.get_rb_name(name) else {
             bail!("Rigid body {name} not found");
         };
 
@@ -83,7 +90,7 @@ impl MotionCapture {
         }
 
         let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream_name = format!("{STREAM_NAME}/{name}");
+        let stream_name = format!("{NAME}/{name}");
         let stream = sink.add_stream(stream_name, channels).await?;
 
         subscription_lock.push(Subscription::new(rigid_body.id, stream));
@@ -94,13 +101,13 @@ impl MotionCapture {
     pub async fn unsubscribe(&self, name: &str, sink: &Sink) -> bool {
         let description_lock = self.inner.description.lock().await;
 
-        if let Some(rigid_body) = description_lock.get_rb(name) {
+        if let Some(rigid_body) = description_lock.get_rb_name(name) {
             let mut lock = self.inner.subscriptions.lock().await;
 
             if let Some(pos) = lock.iter().position(|s| s.id == rigid_body.id) {
                 lock.swap_remove(pos);
 
-                let stream_name = format!("{STREAM_NAME}/{name}");
+                let stream_name = format!("{NAME}/{name}");
                 sink.remove_stream(&stream_name).await;
                 return true;
             }
@@ -117,6 +124,25 @@ impl MotionCapture {
 
         Ok(())
     }
+
+    // async fn register_subscriptions(&self, sink: &Sink) -> Result<()> {
+    //     let description = self.inner.description.lock().await;
+    //     let mut subscriptions = self.inner.subscriptions.lock().await;
+
+    //     for subscription in &mut *subscriptions {
+    //         // Rigid body description must exist if a subscription is active
+    //         let rb = description.get_rb(subscription.id).unwrap();
+
+    //         if !sink.has_stream(&rb.name).await {
+    //             let name = format!("{NAME}/{}", rb.name);
+    //             let channels = CHANNELS.map(str::to_owned).to_vec();
+    //             let stream = sink.add_stream(name, channels).await?;
+    //             subscription.stream = Some(stream)
+    //         }
+    //     }
+
+    //     Ok(())
+    // }
 
     async fn receiver_task(inner: Arc<MotionCaptureInner>) -> Result<(), TaskError> {
         let mut buf = Vec::with_capacity(BUFFER_SIZE);

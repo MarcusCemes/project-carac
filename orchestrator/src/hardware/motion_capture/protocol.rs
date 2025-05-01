@@ -143,7 +143,11 @@ pub struct Description {
 }
 
 impl Description {
-    pub fn get_rb(&self, name: &str) -> Option<&RigidBodyDesc> {
+    pub fn get_rb(&self, id: i32) -> Option<&RigidBodyDesc> {
+        self.rigid_bodies.iter().find(|rb| rb.id == id)
+    }
+
+    pub fn get_rb_name(&self, name: &str) -> Option<&RigidBodyDesc> {
         self.rigid_bodies.iter().find(|rb| rb.name == name)
     }
 }

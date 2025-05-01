@@ -5,7 +5,7 @@ use eyre::{ContextCompat, Result};
 use crate::recording::{Recording, StreamDefinition};
 
 pub async fn segment(divisions: u32) -> Result<()> {
-    let recording = Recording::decode(&mut io::stdin())?;
+    let recording = Recording::decode_reader(&mut io::stdin())?;
 
     let mut segmented_recording = recording
         .segment(divisions)

@@ -40,6 +40,8 @@ enum Command {
     },
 
     Server {
+        #[arg(short, long, default_value = "config.yaml")]
+        config: String,
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
     },
@@ -73,7 +75,7 @@ pub async fn run() -> Result<()> {
         Command::Counter => self::examples::counter().await,
         Command::PlotJugglerDemo => self::examples::plot_juggler().await,
         Command::Run { config } => self::run::launch(&config).await,
-        Command::Server { port } => self::server::start(port).await,
+        Command::Server { config, port } => self::server::start(&config, port).await,
 
         Command::Test {
             robot_ip,

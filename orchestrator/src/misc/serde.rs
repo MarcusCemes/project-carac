@@ -16,7 +16,7 @@ use serde::{
 ///  ```
 /// This evaluates to the JSON object `{ "devices": null }`, this deserializer will initialise
 /// `devices` to `Some(Devices::default())` instead of `None`.
-pub fn deserialise_empty_to_default<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+pub fn deserialize_null_to_default<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de> + Default,
     D: Deserializer<'de>,

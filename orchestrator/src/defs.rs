@@ -1,5 +1,6 @@
 use bincode::{Decode, Encode};
 use quaternion::{euler_angles, Quaternion};
+use serde::{Deserialize, Serialize};
 
 pub type Vec3<T> = [T; 3];
 
@@ -22,7 +23,7 @@ impl Pose {
 // The required size for a Point or Joint
 pub const POINT_JOINT_SIZE: usize = 6 * std::mem::size_of::<f32>();
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
+#[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
@@ -41,7 +42,7 @@ impl From<Point> for Pose {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
+#[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
 pub struct Joint([f32; 6]);
 
 #[cfg(test)]
