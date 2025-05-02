@@ -63,7 +63,8 @@ struct InnerShared {
     streams: Vec<Stream>,
 }
 
-struct Marker {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Marker {
     duration: u32,
     name: String,
     time_us: u32,
@@ -120,6 +121,37 @@ impl Sink {
 
     /* == Recording == */
 
+    pub async fn add_marker(&self, name: String) {
+        self.add_marker_with_duration(name, 0).await
+    }
+
+    pub async fn add_marker_with_duration(&self, name: String, duration: u32) {
+        let mut lock = self.inner.shared.lock().await;
+        let time_us = lock.elapsed_micros();
+
+        lock.markers.push(Marker {
+            name,
+            time_us,
+            duration,
+        });
+    }
+
+    pub async fn create_span(&self, marker: &str) -> Result<()> {
+        let mut lock = self.inner.shared.lock().await;
+
+        let time_us = lock.elapsed_micros();
+
+        let first_marker = lock
+            .markers
+            .iter_mut()
+            .rev()
+            .find(|m| m.name == marker && m.duration == 0)
+            .ok_or_else(|| eyre!("No span found for marker {}", marker))?;
+
+        first_marker.duration = time_us - first_marker.time_us;
+        Ok(())
+    }
+
     pub fn set_record(&self, active: bool) {
         self.inner.recording.store(active, Ordering::SeqCst);
     }
@@ -130,14 +162,23 @@ impl Sink {
         let mut lock = self.inner.shared.lock().await;
         tracing::debug!("Completed recording");
 
-        let timestamp_us = lock.reference_time.timestamp_micros();
-        let streams = lock.streams.iter_mut().map(Stream::complete).collect();
+        let markers = lock.markers.clone();
+        let start_timestamp_us = lock.reference_time.timestamp_micros();
+        let recorded_streams = lock.streams.iter_mut().map(Stream::complete).collect();
 
-        Recording::new(timestamp_us, streams)
+        Recording {
+            markers,
+            recorded_streams,
+            start_timestamp_us,
+        }
     }
 
     pub async fn clear_buffer(&self) {
-        for stream in &mut self.inner.shared.lock().await.streams {
+        let mut lock = self.inner.shared.lock().await;
+
+        lock.markers.clear();
+
+        for stream in &mut lock.streams {
             stream.buffer.clear();
         }
     }
@@ -309,6 +350,7 @@ impl StreamBuffer {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Recording {
+    pub markers: Vec<Marker>,
     pub start_timestamp_us: i64,
     pub recorded_streams: Vec<RecordedStream>,
 }
@@ -328,13 +370,6 @@ pub struct RecordedSample<'a> {
 }
 
 impl Recording {
-    pub fn new(start_timestamp_us: i64, streams: Vec<RecordedStream>) -> Self {
-        Self {
-            start_timestamp_us,
-            recorded_streams: streams,
-        }
-    }
-
     pub fn segment(&self, divisions: u32) -> Option<SegmentedRecordingIterator<'_>> {
         SegmentedRecordingIterator::new(self, divisions)
     }
@@ -401,9 +436,20 @@ impl RecordingEncoder<'_> {
         buf.put_u8(FORMAT_VERSION);
         buf.put_i64(self.0.start_timestamp_us);
 
+        self.encode_markers(buf);
         self.encode_definitions(buf);
         self.encode_timestamps(buf);
         self.encode_data(buf);
+    }
+
+    fn encode_markers<B: BufMut>(&self, buf: &mut B) {
+        buf.put_u8(self.0.markers.len() as u8);
+
+        for marker in &self.0.markers {
+            buf.put_u32(marker.time_us);
+            buf.put_u32(marker.duration);
+            buf.put_string(&marker.name);
+        }
     }
 
     fn encode_definitions<B: BufMut>(&self, buf: &mut B) {
@@ -445,6 +491,7 @@ impl RecordingEncoder<'_> {
 #[derive(Default)]
 struct RecordingDecoder {
     definitions: Vec<StreamDefinition>,
+    markers: Vec<Marker>,
     timestamps: Vec<Vec<u32>>,
     data: Vec<Vec<f32>>,
     start_timestamp_us: i64,
@@ -466,11 +513,24 @@ impl RecordingDecoder {
 
         self.start_timestamp_us = buf.try_get_i64().ok()?;
 
+        self.decode_markers(buf)?;
         self.decode_definitions(buf)?;
         self.decode_timestamps(buf)?;
         self.decode_data(buf)?;
 
         Some(self.finalise())
+    }
+
+    fn decode_markers<B: Buf>(&mut self, buf: &mut B) -> Option<()> {
+        for _ in 0..buf.try_get_u8().ok()? {
+            self.markers.push(Marker {
+                time_us: buf.try_get_u32().ok()?,
+                duration: buf.try_get_u32().ok()?,
+                name: buf.try_get_string()?,
+            });
+        }
+
+        Some(())
     }
 
     fn decode_definitions<B: Buf>(&mut self, buf: &mut B) -> Option<()> {
@@ -532,23 +592,16 @@ impl RecordingDecoder {
                 });
             });
 
+        let markers = self.markers;
         let start_timestamp_us = self.start_timestamp_us;
 
         Recording {
+            markers,
             start_timestamp_us,
             recorded_streams,
         }
     }
 }
-
-//     for stream in streams {
-//         for sample in stream.iter_samples() {
-//             for channel in sample.channel_data {
-//                 buf.put_f32(*channel);
-//             }
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -557,6 +610,18 @@ mod tests {
     #[test]
     fn test_encode_decode_recording() {
         let recording = Recording {
+            markers: vec![
+                Marker {
+                    name: "TestMarker".to_string(),
+                    time_us: 123456,
+                    duration: 0,
+                },
+                Marker {
+                    name: "AnotherMarker".to_string(),
+                    time_us: 654321,
+                    duration: 9876,
+                },
+            ],
             start_timestamp_us: 123456789,
             recorded_streams: vec![
                 RecordedStream {

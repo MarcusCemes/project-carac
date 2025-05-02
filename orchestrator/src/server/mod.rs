@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use axum::{
     extract,
@@ -15,11 +15,6 @@ struct AppState {
 }
 
 pub fn create_router(orchestrator: Orchestrator) -> Router {
-    eprintln!(
-        "{}",
-        serde_json::to_string_pretty(&vec![Instruction::Sleep(Duration::from_secs(1))]).unwrap()
-    );
-
     Router::new()
         .route("/execute", post(execute))
         .route("/status", get(status))

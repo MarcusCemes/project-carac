@@ -90,12 +90,14 @@ impl Orchestrator {
                 }
             }
 
+            Instruction::AddMarker(name) => Ok(self.sink.add_marker(name).await),
+            Instruction::CreateSpan(name) => self.sink.create_span(&name).await,
             Instruction::NewRecording => Ok(self.sink.clear_buffer().await),
             Instruction::SetRecord(record) => Ok(self.sink.set_record(record)),
             Instruction::ResetTime => Ok(self.sink.set_time_now().await),
             Instruction::Sleep(duration) => Ok(sleep(duration).await),
 
-            _ => unimplemented!(),
+            Instruction::SaveRecording(_name) => todo!(),
         }
     }
 }
@@ -106,7 +108,7 @@ impl Orchestrator {
 #[serde(tag = "type")]
 pub enum Instruction {
     AddMarker(String),
-    AddSpan(String),
+    CreateSpan(String),
     LoadCell(LoadCellInstruction),
     MotionCapture(MotionCaptureInstruction),
     NewRecording,
