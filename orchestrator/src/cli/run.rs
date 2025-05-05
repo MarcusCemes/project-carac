@@ -35,7 +35,8 @@ pub async fn launch(config_path: &str) -> Result<()> {
         lc.stop_streaming().await?;
     }
 
-    sink.complete().await.encode_writer(&mut io::stdout())?;
+    let recording = sink.complete().await;
+    recording.encode_writer(&mut io::stdout())?;
 
     Ok(())
 }

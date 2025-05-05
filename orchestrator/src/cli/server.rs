@@ -8,12 +8,14 @@ use crate::{
     config::Config, hardware::HardwareContext, orchestrator::Orchestrator, server::create_router,
 };
 
+const HARDWARE_TIMEOUT: Duration = Duration::from_secs(1);
+
 pub async fn start(config_path: &str, port: u16) -> Result<()> {
     let config = Config::load(config_path).await?;
     tracing::info!("{}", config.hardware);
 
     let context = HardwareContext::builder()
-        .with_timeout(Duration::from_secs(1))
+        .with_timeout(HARDWARE_TIMEOUT)
         .build(&config.hardware)
         .await?;
 

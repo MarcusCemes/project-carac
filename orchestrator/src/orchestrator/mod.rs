@@ -11,7 +11,7 @@ use crate::{
         HardwareContext,
     },
     misc::type_name,
-    recording::Sink,
+    recording::{Recording, Sink},
 };
 
 pub struct Orchestrator {
@@ -99,6 +99,15 @@ impl Orchestrator {
 
             Instruction::SaveRecording(_name) => todo!(),
         }
+    }
+
+    pub async fn complete(&self) -> Recording {
+        self.sink.complete().await
+    }
+
+    pub async fn reset(&mut self) {
+        self.sink.clear_buffer().await;
+        self.sink.set_time_now().await;
     }
 }
 

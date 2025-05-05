@@ -6,35 +6,48 @@ use std::{
 
 use bincode::{error::DecodeError, Decode, Encode};
 use eyre::{Context, Result};
+use nalgebra::{Rotation3, Vector3};
 use reqwest::get;
 use serde::Deserialize;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::LoadCellConfig,
+    defs::Point,
     misc::network_config,
     recording::{Sink, StreamWriter},
 };
 
-const DEFAULT_IP: &str = "192.168.1.1";
+const API_PATH: &str = "/netftapi2.xml";
 const PORT: u16 = 49152;
 
 const COMMAND_HEADER: u16 = 0x1234;
 const BUFFER_SIZE: usize = 8192; // 8KB
 
+const STANDARD_FORCE_UNIT: &str = "N";
+const STANDARD_TORQUE_UNIT: &str = "Nm";
 const STREAM_NAME: &str = "load_cell";
 const CHANNELS: [&str; 6] = ["fx", "fy", "fz", "tx", "ty", "tz"];
 
+const DEVICE_CUTOFF_FREQ: [u32; 13] = [0, 838, 326, 152, 73, 35, 18, 8, 5, 1500, 2000, 2500, 3000];
+
 type Data = [f32; CHANNELS.len()];
+
 pub struct LoadCell {
-    inner: Arc<LoadCellInner>,
+    inner: Arc<Inner>,
     task: JoinHandle<Result<(), TaskError>>,
 }
 
-struct LoadCellInner {
-    config: DeviceConfig,
+struct Inner {
+    config: NetFtApi2,
     link: Link,
-    stream: Mutex<Option<StreamWriter>>,
+    shared: Mutex<Shared>,
+}
+
+#[derive(Default)]
+struct Shared {
+    stream: Option<StreamWriter>,
+    transform: Option<LoadTransform>,
 }
 
 struct Link(UdpSocket);
@@ -59,21 +72,18 @@ struct Command {
     sample_count: u32,
 }
 
-#[derive(Deserialize)]
-struct DeviceConfig {
-    #[serde(rename = "scalfu")]
+#[derive(Debug, Deserialize)]
+struct NetFtApi2 {
+    #[serde(rename = "scfgfu")]
     force_unit: String,
-    #[serde(rename = "scaltu")]
+    #[serde(rename = "scfgtu")]
     torque_unit: String,
-    #[serde(rename = "calcpf")]
+    #[serde(rename = "cfgcpf")]
     force_counts: f32,
-    #[serde(rename = "calcpt")]
+    #[serde(rename = "cfgcpt")]
     torque_counts: f32,
-
-    #[serde(rename = "comrdtbsiz")]
-    buffer_size: u8,
     #[serde(rename = "setuserfilter")]
-    low_pass_frequency: u8,
+    low_pass_filter: u8,
     #[serde(rename = "comrdtrate")]
     output_rate: u32,
     #[serde(rename = "runrate")]
@@ -92,10 +102,10 @@ impl LoadCell {
 
         socket.connect((ip, PORT)).await?;
 
-        let inner = Arc::new(LoadCellInner {
+        let inner = Arc::new(Inner {
             config,
             link: Link(socket),
-            stream: Mutex::new(None),
+            shared: Mutex::new(Shared::default()),
         });
 
         let task = tokio::spawn(Self::load_cell_task(inner.clone()));
@@ -107,7 +117,7 @@ impl LoadCell {
         let channels = CHANNELS.map(str::to_owned).to_vec();
         let stream = sink.add_stream(STREAM_NAME.to_owned(), channels).await?;
 
-        *self.inner.stream.lock().await = Some(stream);
+        self.inner.shared.lock().await.stream = Some(stream);
 
         Ok(())
     }
@@ -124,39 +134,67 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    async fn fetch_config(ip: IpAddr) -> Result<DeviceConfig> {
-        let xml_str = get(&format!("http://{ip}/netftcalapi.xml"))
-            .await?
-            .text()
-            .await?;
+    pub async fn set_tool_offset(&self, offset: Point) {
+        let transform = LoadTransform::new(offset);
+        self.inner.shared.lock().await.transform = Some(transform);
+    }
 
-        // Deserialize with serde and quick_xml
-        let config: DeviceConfig =
+    async fn fetch_config(ip: IpAddr) -> Result<NetFtApi2> {
+        let xml_str = get(&format!("http://{ip}{API_PATH}")).await?.text().await?;
+
+        let config: NetFtApi2 =
             quick_xml::de::from_str(&xml_str).wrap_err("Failed to parse XML config")?;
 
-        if config.force_unit != "N" {
-            tracing::warn!("Force unit is not N: {}", config.force_unit);
+        if config.force_unit != STANDARD_FORCE_UNIT {
+            tracing::warn!(
+                "Non-standard force unit \"{}\" (expected {STANDARD_FORCE_UNIT})",
+                config.force_unit
+            );
         }
 
-        if config.torque_unit != "Nm" {
-            tracing::warn!("Torque unit is not Nm: {}", config.torque_unit);
+        if config.torque_unit != STANDARD_TORQUE_UNIT {
+            tracing::warn!(
+                "Non-standard torque unit \"{}\" (expected {STANDARD_TORQUE_UNIT})",
+                config.torque_unit
+            );
+        }
+
+        if config.output_rate < config.internal_rate {
+            tracing::warn!(
+                "Output rate {} Hz is less than internal rate ({} Hz)",
+                config.output_rate,
+                config.internal_rate
+            );
+        }
+
+        if config.low_pass_filter != 0 {
+            tracing::warn!(
+                "Device low-pass filter is enabled ({} Hz)",
+                DEVICE_CUTOFF_FREQ[config.low_pass_filter as usize]
+            );
         }
 
         Ok(config)
     }
 
     #[tracing::instrument(skip(inner))]
-    async fn load_cell_task(inner: Arc<LoadCellInner>) -> Result<(), TaskError> {
+    async fn load_cell_task(inner: Arc<Inner>) -> Result<(), TaskError> {
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
         loop {
             inner.link.0.recv_buf(&mut buf).await?;
 
-            if let Some(ref stream) = *inner.stream.lock().await {
-                let msg = parse_message(&buf)?;
-                let data = msg.data(&inner.config);
+            let lock = inner.shared.lock().await;
 
-                stream.write_now(&data).await;
+            if let Some(stream) = &lock.stream {
+                let msg = Message::from_bytes(&buf)?;
+                let mut load = msg.to_load(&inner.config);
+
+                if let Some(transform) = &lock.transform {
+                    load = transform.apply(&load);
+                }
+
+                stream.write_now(&load.as_array()).await;
             }
 
             buf.clear();
@@ -221,16 +259,64 @@ struct Message {
     tz: i32,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct Load {
+    force: Vector3<f32>,
+    moment: Vector3<f32>,
+}
+
 impl Message {
-    fn data(&self, config: &DeviceConfig) -> Data {
+    fn from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
+        Ok(bincode::decode_from_slice(buf, network_config())?.0)
+    }
+
+    fn to_load(&self, config: &NetFtApi2) -> Load {
         let [fx, fy, fz] = [self.fx, self.fy, self.fz].map(|x| x as f32 / config.force_counts);
         let [tx, ty, tz] = [self.tx, self.ty, self.tz].map(|x| x as f32 / config.torque_counts);
-        [fx, fy, fz, tx, ty, tz]
+
+        Load {
+            force: Vector3::new(fx, fy, fz),
+            moment: Vector3::new(tx, ty, tz),
+        }
     }
 }
 
-fn parse_message(buf: &[u8]) -> Result<Message, DecodeError> {
-    Ok(bincode::decode_from_slice(buf, network_config())?.0)
+impl Load {
+    fn as_array(&self) -> [f32; 6] {
+        [
+            self.force.x,
+            self.force.y,
+            self.force.z,
+            self.moment.x,
+            self.moment.y,
+            self.moment.z,
+        ]
+    }
+}
+
+/* == Transformation == */
+
+struct LoadTransform {
+    rotation: Rotation3<f32>,
+    translation: Vector3<f32>,
+}
+
+impl LoadTransform {
+    pub fn new(offset: Point) -> Self {
+        let translation = Vector3::new(offset.x, offset.y, offset.z);
+        let rotation = Rotation3::from_euler_angles(offset.rx, offset.ry, offset.rz);
+
+        Self {
+            rotation,
+            translation,
+        }
+    }
+
+    pub fn apply(&self, load: &Load) -> Load {
+        let force = self.rotation * load.force;
+        let moment = self.rotation * load.moment + self.translation.cross(&force);
+        Load { force, moment }
+    }
 }
 
 /* == Utils == */

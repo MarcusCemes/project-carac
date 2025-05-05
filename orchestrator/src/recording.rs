@@ -94,7 +94,7 @@ impl Sink {
         })
     }
 
-    pub async fn add_stream_static<const N: usize>(
+    pub async fn add_stream_size<const N: usize>(
         &self,
         name: &str,
         channels: [&str; N],
@@ -145,10 +145,13 @@ impl Sink {
             .markers
             .iter_mut()
             .rev()
-            .find(|m| m.name == marker && m.duration == 0)
+            .find(|m| m.name == marker)
             .ok_or_else(|| eyre!("No span found for marker {}", marker))?;
 
-        first_marker.duration = time_us - first_marker.time_us;
+        if first_marker.duration == 0 {
+            first_marker.duration = time_us - first_marker.time_us;
+        }
+
         Ok(())
     }
 
@@ -471,7 +474,7 @@ impl RecordingEncoder<'_> {
             ..
         } in &self.0.recorded_streams
         {
-            buf.put_u8(timestamps.len() as u8);
+            buf.put_u32(timestamps.len() as u32);
 
             for timestamp in timestamps {
                 buf.put_u32(*timestamp);
@@ -549,7 +552,7 @@ impl RecordingDecoder {
 
     fn decode_timestamps<B: Buf>(&mut self, buf: &mut B) -> Option<()> {
         for _ in 0..self.definitions.len() {
-            let size = buf.try_get_u8().ok()? as usize;
+            let size = buf.try_get_u32().ok()? as usize;
             let mut stream_timestamps = Vec::with_capacity(size);
 
             for _ in 0..size {
@@ -646,7 +649,7 @@ mod tests {
         let mut buf = Vec::new();
         recording.encode(&mut buf);
 
-        let decoded_recording = Recording::decode(&mut buf.as_slice()).unwrap();
+        let decoded_recording = Recording::decode(&mut &buf[..]).unwrap();
 
         // Compare the JSON representation for equality (key ordering is stable)
         assert_eq!(

@@ -202,7 +202,11 @@ impl WindShape {
 
             if let Some(response) = Response::parse_bytes(&buffer[..size]) {
                 if response.client_id != client_id {
-                    eprintln!("Invalid client ID: {}", response.client_id);
+                    tracing::warn!(
+                        "Received message from unknown client ID: {}",
+                        response.client_id
+                    );
+
                     continue;
                 }
 

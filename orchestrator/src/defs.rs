@@ -33,6 +33,17 @@ pub struct Point {
     pub rz: f32,
 }
 
+impl Point {
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        rx: 0.0,
+        ry: 0.0,
+        rz: 0.0,
+    };
+}
+
 impl From<Point> for Pose {
     fn from(point: Point) -> Self {
         Pose {
