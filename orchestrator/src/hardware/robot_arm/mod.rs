@@ -8,6 +8,8 @@ use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
 use eyre::{bail, eyre, Report, Result};
 use serde::{Deserialize, Serialize};
+use strum::AsRefStr;
+use thiserror::Error;
 use tokio::{
     net::UdpSocket,
     select,
@@ -17,12 +19,12 @@ use tokio::{
 
 use crate::{
     config::RobotArmConfig,
+    data::sink::{DataSink, StreamWriter},
     defs::*,
     misc::network_config,
-    recording::{Sink, StreamWriter},
 };
 
-use super::Hardware;
+use super::HardwareAgent;
 
 const NAME: &str = "robot_arm";
 const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
@@ -51,19 +53,43 @@ struct Shared {
     stream: Option<StreamWriter>,
 }
 
+#[derive(Debug)]
 enum Response {
     Ack(u8),
     Error(u16),
-    MotionComplete,
+    Moving(RobotMoving),
     PowerOff,
     Status(RobotStatus),
 }
 
-#[derive(Decode)]
+#[derive(Debug)]
+struct RobotMoving {
+    settled: bool,
+    queue_empty: bool,
+}
+
+#[derive(Debug, Decode)]
 struct RobotStatus {
+    settled: bool,
+    empty: bool,
     position: Point,
     pose: Joint,
     error: Joint,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum RobotArmInstruction {
+    Move(Motion),
+    SetOffset(Point),
+    SetProfile(SpeedProfile),
+    WaitSettled,
+}
+
+#[derive(Debug, Error)]
+pub enum RobotArmError {
+    #[error("Robot error (code {0})")]
+    RemoteError(u16),
 }
 
 impl RobotArm {
@@ -93,12 +119,25 @@ impl RobotArm {
         Ok(RobotArm { inner, task })
     }
 
-    pub async fn register(&self, sink: &Sink) -> Result<()> {
+    pub async fn register(&self, sink: &DataSink) -> Result<()> {
+        let name = NAME.to_owned();
         let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream = sink.add_stream(NAME.to_owned(), channels).await?;
+        let stream = sink.add_stream(name, channels).await?;
 
         self.inner.shared.lock().await.stream = Some(stream);
+
         Ok(())
+    }
+
+    pub async fn execute(&mut self, instruction: RobotArmInstruction) -> Result<()> {
+        let command = match instruction {
+            RobotArmInstruction::Move(motion) => RobotCommand::Move(motion),
+            RobotArmInstruction::SetOffset(offset) => RobotCommand::SetToolOffset(offset),
+            RobotArmInstruction::SetProfile(profile) => RobotCommand::SetSpeedProfile(profile),
+            RobotArmInstruction::WaitSettled => return Ok(self.try_wait_settled().await?),
+        };
+
+        self.execute_command(command).await
     }
 
     async fn handshake(socket: &UdpSocket) -> Result<()> {
@@ -126,13 +165,13 @@ impl RobotArm {
         self.inner.shared.lock().await.stream = Some(handle)
     }
 
-    pub fn controller(self) -> RobotController {
+    pub fn controller(&self) -> RobotController {
         RobotController(self)
     }
 
     /* == Commands == */
 
-    pub async fn execute_command(&mut self, command: RobotCommand) -> Result<()> {
+    pub async fn execute_command(&self, command: RobotCommand) -> Result<()> {
         let (ack_tx, ack) = oneshot::channel();
 
         let request_id = {
@@ -144,7 +183,7 @@ impl RobotArm {
 
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
-        tracing::trace!("-> {request_id}");
+        tracing::trace!("-> {} ({request_id})", command.as_ref());
         command.encode(&mut buf, request_id);
         self.inner.socket.send(&buf).await?;
 
@@ -153,7 +192,7 @@ impl RobotArm {
         Ok(())
     }
 
-    pub async fn try_wait_settled(&self) -> Result<(), u16> {
+    pub async fn try_wait_settled(&self) -> Result<(), RobotArmError> {
         let mut error = self.inner.error.subscribe();
         let mut moving = self.inner.moving.subscribe();
 
@@ -167,7 +206,7 @@ impl RobotArm {
 
         // Race the error and negative moving edge, whichever comes first
         select! {
-            Ok(code) = error_task => Err(code.unwrap()),
+            Ok(code) = error_task => Err(RobotArmError::RemoteError(code.unwrap())),
             _ = moving_task => Ok(()),
         }
     }
@@ -187,7 +226,7 @@ impl RobotArm {
                 }
 
                 Response::Ack(id) => {
-                    tracing::trace!("<- ACK {id}");
+                    tracing::trace!("<- Ack ({id})");
                     let mut lock = inner.shared.lock().await;
 
                     lock.ack
@@ -200,9 +239,8 @@ impl RobotArm {
                     inner.error.send(Some(code)).ok();
                 }
 
-                Response::MotionComplete => {
-                    tracing::debug!("Motion complete");
-                    inner.moving.send(false).ok();
+                Response::Moving(moving) => {
+                    inner.moving.send(!moving.settled).ok();
                 }
 
                 Response::PowerOff => {
@@ -215,7 +253,7 @@ impl RobotArm {
     }
 }
 
-impl Hardware for RobotArm {
+impl HardwareAgent for RobotArm {
     async fn errored(&mut self) -> Option<Report> {
         self.inner
             .error
@@ -224,24 +262,15 @@ impl Hardware for RobotArm {
     }
 
     async fn on_record(&mut self) {
-        let lock = self.inner.shared.lock().await;
+        self.execute_command(RobotCommand::SetReporting(true))
+            .await
+            .ok();
+    }
 
-        let maybe_pose = self.inner.pose.borrow();
-        let maybe_stream = lock.stream.as_ref();
-        let combined_option = maybe_stream.zip(maybe_pose.as_ref());
-
-        if let Some((
-            stream,
-            Pose {
-                position: p,
-                orientation: o,
-            },
-        )) = combined_option
-        {
-            stream
-                .write_now(&[p[0], p[1], p[2], o.1[0], o.1[1], o.1[2], o.0])
-                .await;
-        }
+    async fn on_pause(&mut self) {
+        self.execute_command(RobotCommand::SetReporting(false))
+            .await
+            .ok();
     }
 
     async fn reset(&mut self) {
@@ -281,6 +310,7 @@ impl Shared {
 
 /* == Command == */
 
+#[derive(AsRefStr)]
 pub enum RobotCommand {
     Halt { return_home: bool },
     Hello,
@@ -289,6 +319,7 @@ pub enum RobotCommand {
     SetReportInterval(f32),
     SetSpeedProfile(SpeedProfile),
     SetToolOffset(Point),
+    SetReporting(bool),
 }
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
@@ -371,15 +402,20 @@ impl RobotCommand {
                 b.put_u8(0x08);
                 b.put_u8(*motion_type as u8);
             }
+
+            RobotCommand::SetReporting(enabled) => {
+                b.put_u8(0x09);
+                b.put_u8(*enabled as u8);
+            }
         };
     }
 }
 
 /* == Controller == */
 
-pub struct RobotController(RobotArm);
+pub struct RobotController<'a>(&'a RobotArm);
 
-impl RobotController {
+impl RobotController<'_> {
     pub async fn move_to(&mut self, motion: Motion) -> Result<()> {
         self.0.execute_command(RobotCommand::Move(motion)).await
     }
@@ -442,7 +478,10 @@ impl Response {
                 Response::Status(status)
             }
 
-            0x02 => Response::MotionComplete,
+            0x02 => Response::Moving(RobotMoving {
+                settled: buf.get_u8() != 0,
+                queue_empty: buf.get_u8() != 0,
+            }),
             0x03 => Response::PowerOff,
 
             0xFE => {

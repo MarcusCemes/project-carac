@@ -1,15 +1,22 @@
-use std::{io, time::Duration};
+use std::time::Duration;
 
 use eyre::Result;
-use tokio::time::sleep;
+use tokio::{io, time::sleep};
 
-use crate::{config::Config, hardware::HardwareContext, recording::Sink};
+use crate::{
+    config::Config,
+    data::{
+        experiment::{Experiment, ExperimentMetadata},
+        sink::DataSink,
+    },
+    hardware::HardwareContext,
+};
 
 pub async fn launch(config_path: &str) -> Result<()> {
     let config = Config::load(config_path).await?;
 
     let ctx = HardwareContext::builder().build(&config.hardware).await?;
-    let sink = Sink::new();
+    let sink = DataSink::new();
 
     if let Some((mc, cfg)) = &ctx.motion_capture.zip(config.hardware.motion_capture) {
         for rb in &cfg.rigid_bodies {
@@ -23,20 +30,23 @@ pub async fn launch(config_path: &str) -> Result<()> {
         lc.start_streaming().await?;
     }
 
-    sink.clear_buffer().await;
-    sink.set_time_now().await;
-    sink.set_record(true);
+    sink.clear().await;
+    sink.set_record(true).await;
 
     sleep(Duration::from_secs_f32(2.)).await;
 
-    sink.set_record(false);
+    sink.set_record(false).await;
 
     if let Some(lc) = &ctx.load_cell {
         lc.stop_streaming().await?;
     }
 
-    let recording = sink.complete().await;
-    recording.encode_writer(&mut io::stdout())?;
+    let run = sink.finish().await;
+
+    let metadata = ExperimentMetadata::new(Some("Test Run".to_string()), sink.streams().await);
+    let experiment = Experiment::new(metadata, vec![run]);
+
+    experiment.write(&mut io::stdout()).await?;
 
     Ok(())
 }

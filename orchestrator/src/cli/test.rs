@@ -7,20 +7,24 @@ use crate::{
     hardware::{
         robot_arm::{Motion, MotionType, RobotArm, SpeedProfile},
         wind_shape::WindShape,
+        HardwareAgent,
     },
 };
 
 pub async fn run(robot_ip: IpAddr, robot_port: u16, windshape_ip: IpAddr) -> Result<()> {
     test_robot_arm(robot_ip, robot_port).await?;
-    test_wind_shape(windshape_ip).await
+    test_wind_shape(windshape_ip).await?;
+    Ok(())
 }
 
 async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
     tracing::info!("Connecting to robot arm");
 
-    let robot_arm = RobotArm::connect(ip, port)
+    let mut robot_arm = RobotArm::connect(ip, port)
         .await
         .wrap_err("Failed to connect to RobotArm")?;
+
+    robot_arm.on_record().await;
 
     let mut r = robot_arm.controller();
 
@@ -105,6 +109,8 @@ async fn test_robot_arm(ip: IpAddr, port: u16) -> Result<()> {
 
     r.go_home(MotionType::Direct).await?;
     r.wait_settled().await?;
+
+    robot_arm.on_pause().await;
 
     Ok(())
 }

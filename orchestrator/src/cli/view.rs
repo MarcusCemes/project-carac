@@ -1,43 +1,60 @@
-use std::{io, mem};
+use std::mem;
 
 use chrono::DateTime;
 use eyre::Result;
+use tokio::io;
 
-use crate::recording::Recording;
+use crate::data::experiment::Experiment;
 
-pub fn display_data() -> Result<()> {
-    let recording = Recording::decode_reader(&mut io::stdin())?;
+pub async fn display_data() -> Result<()> {
+    let experiment = Experiment::read(&mut io::stdin()).await?;
 
-    let start = DateTime::from_timestamp_micros(recording.start_timestamp_us).unwrap();
-    let n_streams = recording.recorded_streams.len();
+    let start = DateTime::from_timestamp_millis(experiment.metadata.timestamp_ms).unwrap();
 
     println!("# == Metadata == #\n");
     println!("Time     {start:?}");
-    println!("Streams  {n_streams}");
-    println!("\n\n# == Data == #");
 
-    for recorded_stream in &recording.recorded_streams {
-        let name = &recorded_stream.definition.name;
-        let n_channels = recorded_stream.definition.channels.len();
+    println!(
+        "Name     {}",
+        experiment
+            .metadata
+            .name
+            .unwrap_or_else(|| "(unnamed)".to_string())
+    );
 
-        println!("\n{name}\n");
-        println!("  Channels");
+    println!("Streams  {}", experiment.metadata.streams.len());
+    println!("Runs     {}", experiment.runs.len());
+    println!("\n\n# == Streams == #");
 
-        for channel in &recorded_stream.definition.channels {
-            println!("    - {channel}");
+    for stream in &experiment.metadata.streams {
+        println!("\n{}", stream.name);
+
+        for channel in &stream.channels {
+            println!("  - {channel}");
         }
+    }
 
-        let n_samples = recorded_stream.data_timestamps_us.len();
-        let size = n_samples * n_channels * mem::size_of::<f32>();
+    for (i, run) in experiment.runs.iter().enumerate() {
+        println!("\n\n# == Run {i} == #");
 
-        println!("\n  Data ({n_samples} - {size} B)");
+        for (stream, definition) in run
+            .recorded_streams
+            .iter()
+            .zip(experiment.metadata.streams.iter())
+        {
+            let n_channels = definition.channels.len();
+            let n_samples = stream.timestamps.len();
+            let size = n_samples * n_channels * mem::size_of::<f32>();
 
-        for sample in recorded_stream.iter_samples() {
-            println!(
-                "    - {:.03}: {:+.03?}",
-                sample.timestamp_s(),
-                sample.channel_data
-            );
+            println!("\n  {} ({n_samples} - {size} B)", definition.name);
+
+            for sample in stream.iter_samples() {
+                println!(
+                    "    - {:.03}: {:+.03?}",
+                    sample.time_s(),
+                    sample.channel_data
+                );
+            }
         }
     }
 

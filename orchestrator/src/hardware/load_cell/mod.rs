@@ -8,14 +8,14 @@ use bincode::{error::DecodeError, Decode, Encode};
 use eyre::{Context, Result};
 use nalgebra::{Rotation3, Vector3};
 use reqwest::get;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::LoadCellConfig,
+    data::sink::{DataSink, StreamWriter},
     defs::Point,
     misc::network_config,
-    recording::{Sink, StreamWriter},
 };
 
 const API_PATH: &str = "/netftapi2.xml";
@@ -90,6 +90,13 @@ struct NetFtApi2 {
     internal_rate: u32,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum LoadCellInstruction {
+    SetBias,
+    SetStreaming(bool),
+}
+
 impl LoadCell {
     pub async fn connect_from_config(config: &LoadCellConfig) -> Result<Self> {
         Self::connect(config.ip).await
@@ -113,13 +120,23 @@ impl LoadCell {
         Ok(LoadCell { inner, task })
     }
 
-    pub async fn subscribe(&self, sink: &Sink) -> Result<()> {
+    pub async fn subscribe(&self, sink: &DataSink) -> Result<()> {
+        let name = STREAM_NAME.to_owned();
         let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream = sink.add_stream(STREAM_NAME.to_owned(), channels).await?;
+        let stream = sink.add_stream(name, channels).await?;
 
         self.inner.shared.lock().await.stream = Some(stream);
 
         Ok(())
+    }
+
+    pub async fn execute(&self, instruction: LoadCellInstruction) -> Result<()> {
+        match instruction {
+            LoadCellInstruction::SetBias => self.set_bias().await,
+            LoadCellInstruction::SetStreaming(true) => self.start_streaming().await,
+            LoadCellInstruction::SetStreaming(false) => self.stop_streaming().await,
+        }
+        .wrap_err("Load cell error")
     }
 
     pub async fn start_streaming(&self) -> io::Result<()> {
@@ -194,7 +211,7 @@ impl LoadCell {
                     load = transform.apply(&load);
                 }
 
-                stream.write_now(&load.as_array()).await;
+                stream.add(&load.as_array()).await;
             }
 
             buf.clear();

@@ -7,6 +7,7 @@ use std::{
 };
 
 use eyre::{eyre, Context, Result};
+use serde::{Deserialize, Serialize};
 use tokio::{io, net::UdpSocket, select, sync::watch, task::JoinSet, time::interval};
 
 use crate::config::WindShapeConfig;
@@ -67,6 +68,15 @@ enum ResponsePayload {
     Status { in_control: bool },
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum WindShapeInstruction {
+    EnablePower(bool),
+    ReleaseControl,
+    RequestControl,
+    SetWindSpeed(u8),
+}
+
 impl WindShape {
     pub async fn connect_from_config(config: &WindShapeConfig) -> Result<Self> {
         Self::connect(config.ip).await
@@ -99,6 +109,24 @@ impl WindShape {
 
     /* == Public API == */
 
+    pub async fn execute(&mut self, instruction: WindShapeInstruction) -> Result<()> {
+        match instruction {
+            WindShapeInstruction::EnablePower(true) => self.enable_power().await,
+            WindShapeInstruction::EnablePower(false) => self.disable_power().await,
+
+            WindShapeInstruction::ReleaseControl => {
+                self.release_control().await;
+                Ok(())
+            }
+
+            WindShapeInstruction::RequestControl => {
+                self.request_control().await;
+                Ok(())
+            }
+
+            WindShapeInstruction::SetWindSpeed(speed) => self.set_fan_speed(speed).await,
+        }
+    }
     pub async fn request_control(&mut self) {
         self.update_control(true).await
     }

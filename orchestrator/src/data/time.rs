@@ -1,11 +1,13 @@
 use std::{iter::Peekable, ops::RangeInclusive};
 
-use crate::recording::{RecordedSample, RecordedStream, Recording, StreamDefinition};
+use crate::data::run::{RecordedStream, RunSample};
+
+use super::run::{Run, StreamInfo};
 
 struct StreamInterpolator<'a> {
     channels: Vec<f32>,
-    cursor: RecordedSample<'a>,
-    iterator: Peekable<Box<dyn Iterator<Item = RecordedSample<'a>> + 'a>>,
+    cursor: RunSample<'a>,
+    iterator: Peekable<Box<dyn Iterator<Item = RunSample<'a>> + 'a>>,
     recorded_stream: &'a RecordedStream,
 }
 
@@ -16,10 +18,10 @@ impl<'a> StreamInterpolator<'a> {
 
         // Get the first sample and initialise the interpolated channels buffer
         let cursor = iterator.next()?;
-        let channels = Vec::with_capacity(recorded_stream.definition.n_channels());
+        let channels = Vec::with_capacity(recorded_stream.n_channels());
 
         // Box the iterator to allow for dynamic dispatch (complex type)
-        let iterator: Box<dyn Iterator<Item = RecordedSample>> = Box::new(iterator);
+        let iterator: Box<dyn Iterator<Item = RunSample>> = Box::new(iterator);
         let iterator = iterator.peekable();
 
         Some(Self {
@@ -33,7 +35,7 @@ impl<'a> StreamInterpolator<'a> {
     fn next(&mut self, time_s: f32) -> &[f32] {
         // Keep advancing the cursor until we find the closest pre-time sample
         while let Some(next_sample) = self.iterator.peek() {
-            if next_sample.timestamp_s() > time_s {
+            if next_sample.time_s() > time_s {
                 break;
             }
 
@@ -46,8 +48,8 @@ impl<'a> StreamInterpolator<'a> {
         };
 
         // Interpolate between the two samples, clamping the time value (no extrapolation)
-        let lt = self.cursor.timestamp_s();
-        let rt = next_cursor.timestamp_s();
+        let lt = self.cursor.time_s();
+        let rt = next_cursor.time_s();
         let t = (time_s - lt) / (rt - lt);
 
         if t.is_nan() {
@@ -72,39 +74,36 @@ impl<'a> StreamInterpolator<'a> {
 }
 
 pub struct SegmentedRecordingIterator<'a> {
-    definitions: Vec<&'a StreamDefinition>,
     interpolators: Vec<StreamInterpolator<'a>>,
+    streams: &'a [StreamInfo],
     time_iterator: SegmentedTimeIterator,
 }
 
 impl<'a> SegmentedRecordingIterator<'a> {
-    pub fn new(recording: &'a Recording, divisions: u32) -> Option<Self> {
+    pub fn new(run: &'a Run, streams: &'a [StreamInfo], divisions: u32) -> Option<Self> {
         let mut start = u32::MAX;
         let mut end = u32::MIN;
 
         // Try to create an interpolator for each stream (must have at least two samples)
-        let mut definitions = Vec::new();
-
-        let interpolators = recording
+        let interpolators = run
             .recorded_streams
             .iter()
             .filter_map(|stream| {
-                start = start.min(*stream.data_timestamps_us.first()?);
-                end = end.max(*stream.data_timestamps_us.last()?);
-                definitions.push(&stream.definition);
-
+                start = start.min(*stream.timestamps.first()?);
+                end = end.max(*stream.timestamps.last()?);
                 StreamInterpolator::new(stream)
             })
             .collect();
 
         // Convert microseconds to seconds
         let [start, end] = [start, end].map(|v| 1e-6 * v as f32);
+        tracing::info!("Creating {divisions} samples between {start:.3} s and {end:.3} s");
 
         let time_iterator = SegmentedTimeIterator::new(start, end, divisions);
 
         Some(Self {
-            definitions,
             interpolators,
+            streams,
             time_iterator,
         })
     }
@@ -119,10 +118,6 @@ impl<'a> SegmentedRecordingIterator<'a> {
         }
 
         Some(time_s)
-    }
-
-    pub fn definitions(&self) -> &[&StreamDefinition] {
-        &self.definitions
     }
 }
 

@@ -1,18 +1,15 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
-  <Program name="stop">
+  <Program name="sendMoving">
     <Locals>
-      <Local name="key" type="string" xsi:type="array" size="1" />
+      <Local name="buffer" type="num" xsi:type="array" size="4" />
     </Locals>
     <Code><![CDATA[begin
-  key = first(TASK_NAMES)
-
-  while key != ""
-    taskKill(TASK_NAMES[key])
-    key = next(TASK_NAMES[key])
-  endWhile
-
-  disablePower()
+  buffer[0] = MAGIC_HEADER
+  buffer[1] = 2
+  buffer[2] = sel(isSettled(), 1, 0)
+  buffer[3] = sel(isEmpty(), 1, 0)
+  sioSet(socket, buffer)
 end
 ]]></Code>
   </Program>

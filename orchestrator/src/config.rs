@@ -1,6 +1,7 @@
 use std::{
     fmt::Display,
     net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
 };
 
 use eyre::{Context, Result};
@@ -13,7 +14,7 @@ use crate::misc::{serde::deserialize_null_to_default, ColourDot};
 #[serde(default)]
 pub struct Config {
     pub hardware: HardwareConfig,
-    pub recording: RecordingConfig,
+    pub sink: SinkConfig,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -65,15 +66,15 @@ pub struct WindShapeConfig {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct RecordingConfig {
-    pub save_path: Option<String>,
+pub struct SinkConfig {
+    pub session_path: Option<PathBuf>,
     #[serde(deserialize_with = "deserialize_null_to_default")]
-    pub plot_juggler: Option<PlotJuggler>,
+    pub plot_juggler: Option<PlotJugglerConfig>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
-pub struct PlotJuggler {
+pub struct PlotJugglerConfig {
     pub ip: IpAddr,
     pub port: u16,
 }
@@ -103,9 +104,9 @@ pub enum Filter {
 
 /* == Default implementations == */
 
-impl Default for PlotJuggler {
+impl Default for PlotJugglerConfig {
     fn default() -> Self {
-        PlotJuggler {
+        PlotJugglerConfig {
             ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 9870,
         }
@@ -155,6 +156,6 @@ impl Display for HardwareConfig {
             s.push_str(&format!("{} {} (device)\n", ColourDot(true), device.name));
         }
 
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }

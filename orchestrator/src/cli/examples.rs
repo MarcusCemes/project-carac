@@ -1,16 +1,20 @@
-use std::{io, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use eyre::Result;
-use tokio::{task::JoinSet, time::sleep};
+use tokio::{io, task::JoinSet, time::sleep};
 
 use crate::{
+    data::{
+        experiment::{Experiment, ExperimentMetadata},
+        run::{RunSample, StreamInfo},
+        sink::DataSink,
+    },
     hardware::example_counter::ExampleCounter,
     misc::plot_juggler::PlotJugglerBroadcaster,
-    recording::{RecordedSample, Sink, StreamDefinition},
 };
 
 pub async fn counter() -> Result<()> {
-    let sink = Sink::new();
+    let sink = DataSink::new();
 
     let mut mock0 = ExampleCounter::new();
     mock0.subscribe(&sink, "counter0".to_owned()).await?;
@@ -21,27 +25,34 @@ pub async fn counter() -> Result<()> {
     let null_handle = sink
         .add_stream(
             "null".to_owned(),
-            ["null0", "null1"].map(str::to_owned).to_vec(),
+            vec!["null0".to_owned(), "null1".to_owned()],
         )
         .await?;
 
-    sink.clear_buffer().await;
-    sink.set_time_now().await;
+    sink.clear().await;
 
     // This will not get recorded
-    null_handle.write_now(&[0., f32::NAN]).await;
+    null_handle.add(&[0., f32::NAN]).await;
 
-    sink.set_record(true);
+    tracing::info!("Recording...");
+    sink.set_record(true).await;
 
     // This will get recorded
-    null_handle.write_now(&[1., f32::NAN]).await;
+    null_handle.add(&[1., f32::NAN]).await;
 
-    sleep(Duration::from_secs_f32(1.2)).await;
+    sleep(Duration::from_secs_f32(1.6)).await;
 
-    sink.set_record(false);
+    tracing::info!("Stopping recording...");
+    sink.set_record(false).await;
 
-    let recording = sink.complete().await;
-    recording.encode_writer(&mut io::stdout())?;
+    let run = sink.finish().await;
+
+    let experiment = Experiment::new(
+        ExperimentMetadata::new(Some("Test Run".to_string()), sink.streams().await),
+        vec![run],
+    );
+
+    experiment.write(&mut io::stdout()).await?;
 
     Ok(())
 }
@@ -49,7 +60,7 @@ pub async fn counter() -> Result<()> {
 pub async fn plot_juggler() -> Result<()> {
     let plot = Arc::new(PlotJugglerBroadcaster::create(None, None)?);
 
-    let mock_streams = Arc::new(["counter0", "counter1"].map(|name| StreamDefinition {
+    let mock_streams = Arc::new(["counter0", "counter1"].map(|name| StreamInfo {
         name: name.to_string(),
         channels: vec!["count".to_string()],
     }));
@@ -71,7 +82,7 @@ pub async fn plot_juggler() -> Result<()> {
 async fn plot_task(
     stream_id: usize,
     plot: Arc<PlotJugglerBroadcaster>,
-    streams: Arc<[StreamDefinition; 2]>,
+    streams: Arc<[StreamInfo; 2]>,
 ) -> Result<()> {
     let stream_id_f32 = stream_id as f32 + 1.;
 
@@ -81,13 +92,12 @@ async fn plot_task(
         let t = 1e-2 * (time as f32) + stream_id_f32;
         let v = t.sin() / stream_id_f32;
 
-        let data = RecordedSample {
+        let data = RunSample {
             channel_data: &[v],
-            definition: &streams[stream_id],
-            recording_timestamp_us: (1e5 * t) as u32,
+            delta_us: (1e5 * t) as u32,
         };
 
-        plot.send(&data)?;
+        plot.send(&data, &*streams)?;
 
         sleep(Duration::from_micros(100)).await;
     }

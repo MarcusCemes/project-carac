@@ -5,7 +5,8 @@ use eyre::Result;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::Config, hardware::HardwareContext, orchestrator::Orchestrator, server::create_router,
+    config::Config, data::orchestrator::Orchestrator, hardware::HardwareContext,
+    server::create_router,
 };
 
 const HARDWARE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -19,7 +20,7 @@ pub async fn start(config_path: &str, port: u16) -> Result<()> {
         .build(&config.hardware)
         .await?;
 
-    let orchestrator = Orchestrator::new(context);
+    let orchestrator = Orchestrator::create(config, context).await?;
     let app = create_router(orchestrator);
 
     let socket = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;

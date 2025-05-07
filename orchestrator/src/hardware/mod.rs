@@ -15,7 +15,7 @@ pub mod wind_shape;
 
 use crate::{config::HardwareConfig, misc::type_name};
 
-trait Hardware {
+pub trait HardwareAgent {
     async fn errored(&mut self) -> Option<Report> {
         None
     }
@@ -78,7 +78,7 @@ impl HardwareContextBuilder {
         for device in &config.additional_devices {
             let device = fuse
                 .init(&Some(device), |c| {
-                    additional_device::Device::connect_from_config(*c)
+                    additional_device::Device::connect_from_config(c)
                 })
                 .await?
                 .unwrap();

@@ -19,7 +19,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-enum Command {
+pub enum Command {
     Config {
         #[arg(short, long, default_value = "config.yaml")]
         config: String,
@@ -28,6 +28,8 @@ enum Command {
     Convert {
         #[arg(short, long, default_value_t = 100)]
         divisions: u32,
+        #[arg(short, long, default_value_t = 0)]
+        run: usize,
     },
 
     Counter,
@@ -66,12 +68,15 @@ enum ConfigCommand {
     },
 }
 
-pub async fn run() -> Result<()> {
-    let cli = Cli::parse();
+pub fn run() -> Result<()> {
+    execute_command(Cli::parse().command)
+}
 
-    match cli.command {
+#[tokio::main]
+pub async fn execute_command(command: Command) -> Result<()> {
+    match command {
         Command::Config { config } => self::config::read_and_print(&config).await,
-        Command::Convert { divisions } => self::convert::segment(divisions).await,
+        Command::Convert { divisions, run } => self::convert::segment(divisions, run).await,
         Command::Counter => self::examples::counter().await,
         Command::PlotJugglerDemo => self::examples::plot_juggler().await,
         Command::Run { config } => self::run::launch(&config).await,
@@ -83,6 +88,6 @@ pub async fn run() -> Result<()> {
             windshape_ip,
         } => self::test::run(robot_ip, robot_port, windshape_ip).await,
 
-        Command::View => self::view::display_data(),
+        Command::View => self::view::display_data().await,
     }
 }

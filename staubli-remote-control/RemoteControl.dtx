@@ -5,7 +5,7 @@
       <Value key="0" value="1" />
     </Data>
     <Data name="socket" access="private" xsi:type="array" type="sio" size="1">
-      <Value key="0" link="Socket\RemoteControl" />
+      <Value key="0" link="UdpSocket\RemoteControl" />
     </Data>
     <Data name="BASE_POSITION" access="private" xsi:type="array" type="pointRx" size="1">
       <Value key="0" x="50" y="50" z="300" fatherId="world[0]" />
@@ -20,6 +20,7 @@
       <Value key="MotionWorker" value="motionWorker" />
       <Value key="MotionReporter" value="motionReporter" />
       <Value key="MotionSupervisor" value="motionSupervisor" />
+      <Value key="MovingReporter" value="movingReporter" />
       <Value key="SocketHandler" value="socketHandler" />
     </Data>
     <Data name="endEffector" access="private" xsi:type="array" type="tool" size="1">
@@ -45,5 +46,6 @@
     <Data name="selectedTool" access="private" xsi:type="array" type="tool" size="1">
       <Value key="0" fatherId="flange[0]" />
     </Data>
+    <Data name="reportEnabled" access="private" xsi:type="array" type="bool" size="1" />
   </Datas>
 </Database>

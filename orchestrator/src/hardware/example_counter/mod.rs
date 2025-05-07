@@ -3,7 +3,7 @@ use std::time::Duration;
 use eyre::Result;
 use tokio::{task::JoinHandle, time::interval};
 
-use crate::recording::{Sink, StreamWriter};
+use crate::data::sink::{DataSink, StreamWriter};
 
 #[derive(Default)]
 pub struct ExampleCounter {
@@ -15,7 +15,7 @@ impl ExampleCounter {
         Self::default()
     }
 
-    pub async fn subscribe(&mut self, sink: &Sink, name: String) -> Result<()> {
+    pub async fn subscribe(&mut self, sink: &DataSink, name: String) -> Result<()> {
         let channels = ["count"].map(str::to_owned).to_vec();
         let stream = sink.add_stream(name, channels).await?;
         let new_task = tokio::spawn(Self::counter_task(stream));
@@ -34,7 +34,7 @@ impl ExampleCounter {
 
         loop {
             clock.tick().await;
-            stream.write_now(&[counter]).await;
+            stream.add(&[counter]).await;
             counter += 1.;
         }
     }

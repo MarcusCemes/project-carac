@@ -102,6 +102,10 @@
       selectedTool = mount
       motionQueued = true
 
+    elseIf buffer[2] == 9 and payloadSize == 1
+      logMsg("[SOCKET] Set reporting request")
+      reportEnabled = buffer[3] != 0
+
     else
       logMsg("[SOCKET] Unknown message: " + toString("", buffer[2]) + "with payload size " + toString("", payloadSize), 3)
       ack = false

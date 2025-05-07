@@ -10,7 +10,7 @@ use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::MotionCaptureConfig,
-    recording::{Sink, StreamWriter},
+    data::sink::{DataSink, StreamWriter},
 };
 
 pub mod protocol;
@@ -75,7 +75,7 @@ impl MotionCapture {
         Ok(MotionCapture { inner, task })
     }
 
-    pub async fn subscribe(&self, name: &str, sink: &Sink) -> Result<()> {
+    pub async fn subscribe(&self, name: &str, sink: &DataSink) -> Result<()> {
         let description_lock = self.inner.description.lock().await;
 
         let Some(rigid_body) = description_lock.get_rb_name(name) else {
@@ -89,32 +89,32 @@ impl MotionCapture {
             return Ok(());
         }
 
+        let name = format!("{NAME}/{name}");
         let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream_name = format!("{NAME}/{name}");
-        let stream = sink.add_stream(stream_name, channels).await?;
+        let stream = sink.add_stream(name, channels).await?;
 
         subscription_lock.push(Subscription::new(rigid_body.id, stream));
 
         Ok(())
     }
 
-    pub async fn unsubscribe(&self, name: &str, sink: &Sink) -> bool {
-        let description_lock = self.inner.description.lock().await;
+    // pub async fn unsubscribe(&self, name: &str, sink: &DataSink) -> bool {
+    //     let description_lock = self.inner.description.lock().await;
 
-        if let Some(rigid_body) = description_lock.get_rb_name(name) {
-            let mut lock = self.inner.subscriptions.lock().await;
+    //     if let Some(rigid_body) = description_lock.get_rb_name(name) {
+    //         let mut lock = self.inner.subscriptions.lock().await;
 
-            if let Some(pos) = lock.iter().position(|s| s.id == rigid_body.id) {
-                lock.swap_remove(pos);
+    //         if let Some(pos) = lock.iter().position(|s| s.id == rigid_body.id) {
+    //             lock.swap_remove(pos);
 
-                let stream_name = format!("{NAME}/{name}");
-                sink.remove_stream(&stream_name).await;
-                return true;
-            }
-        }
+    //             let stream_name = format!("{NAME}/{name}");
+    //             sink.remove_stream(&stream_name).await;
+    //             return true;
+    //         }
+    //     }
 
-        false
-    }
+    //     false
+    // }
 
     pub async fn refresh_descriptions(&self) -> Result<()> {
         let new_description = Self::get_model_definitions(&self.inner.socket).await?;
@@ -167,7 +167,7 @@ impl MotionCapture {
                 for rb in frame.rigid_bodies {
                     if let Some(subscription) = subscriptions.iter().find(|s| s.id == rb.id) {
                         let data: Data = rb.into();
-                        subscription.stream.write_now(&data).await;
+                        subscription.stream.add(&data).await;
                     }
                 }
             }

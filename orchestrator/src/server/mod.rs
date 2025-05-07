@@ -8,10 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::{
-    orchestrator::{Instruction, Orchestrator},
-    recording::Recording,
-};
+use crate::data::orchestrator::{Instruction, Orchestrator};
 
 struct AppState {
     orchestrator: Mutex<Orchestrator>,
@@ -62,18 +59,22 @@ async fn execute(
 
 /* == Complete ==  */
 
-async fn complete(extract::State(state): extract::State<Arc<AppState>>) -> Json<Recording> {
-    let orchestrator = state.orchestrator.lock().await;
-    let recording = orchestrator.complete().await;
+async fn complete(extract::State(_state): extract::State<Arc<AppState>>) -> Json<()> {
+    todo!()
 
-    Json(recording)
+    // let orchestrator = state.orchestrator.lock().await;
+    // let recording = orchestrator.complete().await;
+
+    // Json(recording)
 }
 
 /* == Reset == */
 
-async fn reset(extract::State(state): extract::State<Arc<AppState>>) {
-    let mut orchestrator = state.orchestrator.lock().await;
-    orchestrator.reset().await;
+async fn reset(extract::State(_state): extract::State<Arc<AppState>>) {
+    todo!()
+
+    // let mut orchestrator = state.orchestrator.lock().await;
+    // orchestrator.reset().await;
 }
 
 /* == Status == */

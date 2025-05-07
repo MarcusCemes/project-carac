@@ -15,6 +15,7 @@
   taskCreate TASK_NAMES["SocketHandler"], 5, socketHandler()
   taskCreate TASK_NAMES["MotionWorker"], 10, motionWorker()
   taskCreate TASK_NAMES["MotionSupervisor"], 20, motionSupervisor()
+  taskCreate TASK_NAMES["MovingReporter"], 29, movingReporter()
   taskCreate TASK_NAMES["MotionReporter"], 30, motionReporter()
 end
 ]]></Code>

@@ -3,15 +3,12 @@
   <Program name="motionReporter">
     <Code><![CDATA[begin
   while true
-    wait(!isEmpty())
+    wait(reportEnabled)
 
-    while !isEmpty()
+    while reportEnabled
       call sendStatus()
       delay(reportInterval)
     endWhile
-
-    call sendStatus()
-    call sendComplete()
   endWhile
 end
 ]]></Code>

@@ -6,10 +6,10 @@ use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::DeviceConfig,
-    recording::{Sink, StreamWriter},
+    data::sink::{DataSink, StreamWriter},
 };
 
-use super::Hardware;
+use super::HardwareAgent;
 
 const BUFFER_SIZE: usize = 1024;
 const MAGIC_NUMBER: u8 = 0xDE;
@@ -45,7 +45,7 @@ impl Device {
         &self.inner.config
     }
 
-    pub async fn subscribe(&self, sink: &Sink) -> Result<()> {
+    pub async fn subscribe(&self, sink: &DataSink) -> Result<()> {
         let DeviceConfig { name, channels, .. } = &self.inner.config;
         let stream = sink.add_stream(name.clone(), channels.clone()).await?;
 
@@ -70,7 +70,7 @@ async fn device_task(inner: Arc<Inner>) -> Result<()> {
                 data.clear();
                 data.extend(iter::from_fn(|| payload.try_get_f32().ok()));
 
-                stream.write_now(&data).await;
+                stream.add(&data).await;
             }
         }
 
@@ -78,7 +78,7 @@ async fn device_task(inner: Arc<Inner>) -> Result<()> {
     }
 }
 
-impl Hardware for Device {}
+impl HardwareAgent for Device {}
 
 impl Drop for Device {
     fn drop(&mut self) {

@@ -5,10 +5,9 @@ use eyre::Result;
 use orchestrator::cli::run;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     init()?;
-    run().await
+    run()
 }
 
 fn init() -> Result<()> {

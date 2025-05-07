@@ -6,7 +6,7 @@ use std::{
 use eyre::Result;
 use serde::Serialize;
 
-use crate::recording::RecordedSample;
+use crate::data::run::{RunSample, StreamInfo};
 
 const DEFAULT_PORT: u16 = 9870;
 
@@ -38,22 +38,25 @@ impl PlotJugglerBroadcaster {
         Ok(PlotJugglerBroadcaster { addr, socket })
     }
 
-    pub fn send(&self, sample: &RecordedSample) -> Result<()> {
-        let buffer = serde_json::to_vec(&Message::from(sample))?;
+    pub fn send(&self, sample: &RunSample, streams: &[StreamInfo]) -> Result<()> {
+        let message = Message::new(sample, streams);
+        let buffer = serde_json::to_vec(&message)?;
+
         self.socket.send_to(&buffer, self.addr)?;
+
         Ok(())
     }
 }
 
-impl From<&RecordedSample<'_>> for Message {
-    fn from(value: &RecordedSample) -> Self {
+impl Message {
+    fn new(sample: &RunSample, streams: &[StreamInfo]) -> Self {
         Message {
-            ts: value.timestamp_s(),
+            ts: sample.time_s(),
 
-            fields: value
-                .definition
-                .qualified_channel_names()
-                .zip(value.channel_data.iter().copied())
+            fields: streams
+                .iter()
+                .flat_map(StreamInfo::qualified_channel_names)
+                .zip(sample.channel_data.iter().copied())
                 .collect(),
         }
     }
