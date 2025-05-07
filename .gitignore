@@ -10,4 +10,4 @@ rustc-ice*.txt
 config.yaml
 *.csv
 *.dat
-*.raw
+*.parquet

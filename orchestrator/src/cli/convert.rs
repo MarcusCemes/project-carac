@@ -1,35 +1,48 @@
 use std::io;
 
+use clap::{Parser, ValueEnum};
 use eyre::{ContextCompat, Result};
+use polars::prelude::*;
 
-use crate::data::{experiment::Experiment, run::StreamInfo};
+use crate::data::experiment::Experiment;
 
-pub async fn segment(divisions: u32, run: usize) -> Result<()> {
+const DEFAULT_DIVISIONS: u32 = 100;
+
+#[derive(Clone, Debug, Parser)]
+pub struct ConvertOpts {
+    #[clap(short, long, default_value = "csv")]
+    pub format: OutputFormat,
+    #[clap(short, long, default_value_t = DEFAULT_DIVISIONS)]
+    pub divisions: u32,
+    #[clap(short, long, default_value_t = 0)]
+    pub run: usize,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum OutputFormat {
+    Csv,
+    Parquet,
+}
+
+pub async fn segment(opts: ConvertOpts) -> Result<()> {
     let experiment = Experiment::read(&mut tokio::io::stdin()).await?;
 
-    let run = experiment.runs.get(run).wrap_err("Invalid run index")?;
+    let run = experiment
+        .runs
+        .get(opts.run)
+        .wrap_err("Invalid run index")?;
 
-    let mut segmented_run = run
-        .segment(&experiment.metadata.streams, divisions)
-        .wrap_err("Failed to segment recording")?;
+    let mut df = run.dataframe(&experiment.metadata.streams, opts.divisions)?;
 
-    let mut w = csv::Writer::from_writer(io::stdout());
+    match opts.format {
+        OutputFormat::Csv => {
+            CsvWriter::new(&mut io::stdout()).finish(&mut df)?;
+        }
 
-    let header = experiment
-        .metadata
-        .streams
-        .iter()
-        .flat_map(StreamInfo::qualified_channel_names)
-        .collect::<Vec<_>>();
-
-    w.write_field("time")?;
-    w.write_record(&header)?;
-
-    let mut buf = Vec::new();
-
-    while let Some(time) = segmented_run.next(&mut buf) {
-        w.write_field(time.to_string())?;
-        w.write_record(buf.iter().map(f32::to_string))?;
+        OutputFormat::Parquet => {
+            ParquetWriter::new(&mut io::stdout()).finish(&mut df)?;
+        }
     }
 
     Ok(())

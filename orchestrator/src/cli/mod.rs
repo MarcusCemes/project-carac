@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
+use convert::ConvertOpts;
 use eyre::Result;
 
 mod config;
@@ -25,12 +26,7 @@ pub enum Command {
         config: String,
     },
 
-    Convert {
-        #[arg(short, long, default_value_t = 100)]
-        divisions: u32,
-        #[arg(short, long, default_value_t = 0)]
-        run: usize,
-    },
+    Convert(ConvertOpts),
 
     Counter,
 
@@ -76,7 +72,7 @@ pub fn run() -> Result<()> {
 pub async fn execute_command(command: Command) -> Result<()> {
     match command {
         Command::Config { config } => self::config::read_and_print(&config).await,
-        Command::Convert { divisions, run } => self::convert::segment(divisions, run).await,
+        Command::Convert(opts) => self::convert::segment(opts).await,
         Command::Counter => self::examples::counter().await,
         Command::PlotJugglerDemo => self::examples::plot_juggler().await,
         Command::Run { config } => self::run::launch(&config).await,

@@ -1,3 +1,7 @@
+use std::iter;
+
+use eyre::{Context, ContextCompat, Result};
+use polars::prelude::*;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
@@ -50,6 +54,43 @@ impl Run {
         divisions: u32,
     ) -> Option<SegmentedRecordingIterator<'a>> {
         SegmentedRecordingIterator::new(self, streams, divisions)
+    }
+
+    pub fn dataframe(&self, streams: &[StreamInfo], divisions: u32) -> Result<DataFrame> {
+        let n_channels = streams.iter().map(|s| s.channels.len()).sum();
+
+        let mut data_buffer = vec![0.; n_channels];
+        let mut time_series = Vec::with_capacity(divisions as usize);
+
+        let mut series = iter::repeat_with(|| Vec::with_capacity(divisions as usize))
+            .take(n_channels)
+            .collect::<Vec<_>>();
+
+        let mut iterator = self
+            .segment(streams, divisions)
+            .wrap_err("Segmentation failed")?;
+
+        while let Some(time) = iterator.next(&mut data_buffer) {
+            for (data, series) in data_buffer.iter().zip(series.iter_mut()) {
+                series.push(*data);
+            }
+
+            time_series.push(time);
+        }
+
+        let ca_time =
+            ChunkedArray::<Float32Type>::from_vec("time".into(), time_series).into_column();
+
+        let ca_channels = series
+            .into_iter()
+            .zip(streams.iter().flat_map(|s| s.qualified_channel_names()))
+            .map(|(series, name)| {
+                ChunkedArray::<Float32Type>::from_vec(name.into(), series).into_column()
+            });
+
+        let columns = iter::once(ca_time).chain(ca_channels).collect();
+
+        DataFrame::new(columns).wrap_err("Failed to create DataFrame")
     }
 
     pub async fn read<R: AsyncRead + Unpin>(r: &mut R, streams: &[StreamInfo]) -> io::Result<Self> {
