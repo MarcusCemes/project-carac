@@ -1,8 +1,8 @@
 [package]
 name = "orchestrator"
 version = "0.1.0"
-edition = "2021"
-default-run = "orchestrator"
+edition = "2024"
+default-run = "drone-lab"
 
 [dependencies]
 axum = "0.8"

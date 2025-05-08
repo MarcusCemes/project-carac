@@ -1,5 +1,4 @@
 use std::{
-    mem,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
@@ -8,7 +7,7 @@ use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
 use eyre::{bail, eyre, Report, Result};
 use serde::{Deserialize, Serialize};
-use strum::AsRefStr;
+use strum::{AsRefStr, EnumDiscriminants};
 use thiserror::Error;
 use tokio::{
     net::UdpSocket,
@@ -315,25 +314,18 @@ pub enum RobotCommand {
     Halt { return_home: bool },
     Hello,
     Move(Motion),
-    ReturnHome(MotionType),
+    ReturnHome(MotionDiscriminants),
     SetReportInterval(f32),
     SetSpeedProfile(SpeedProfile),
     SetToolOffset(Point),
     SetReporting(bool),
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, EnumDiscriminants)]
 pub enum Motion {
     Direct(Point),
     Joint(Joint),
     Linear(Point),
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum MotionType {
-    Direct,
-    Joint,
-    Linear,
 }
 
 #[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
@@ -343,18 +335,6 @@ pub struct SpeedProfile {
     pub acceleration_scale: u8,
     pub velocity_scale: u8,
     pub deceleration_scale: u8,
-}
-
-const SPEED_PROFILE_SIZE: usize = mem::size_of::<SpeedProfile>();
-
-impl From<&Motion> for MotionType {
-    fn from(value: &Motion) -> Self {
-        match value {
-            Motion::Direct(_) => MotionType::Direct,
-            Motion::Joint(_) => MotionType::Joint,
-            Motion::Linear(_) => MotionType::Linear,
-        }
-    }
 }
 
 /* == Command == */
@@ -375,7 +355,7 @@ impl RobotCommand {
             }
 
             RobotCommand::Move(motion) => {
-                b.put_u8(0x02 + MotionType::from(motion).id());
+                b.put_u8(0x02 + MotionDiscriminants::from(motion).id());
 
                 match motion {
                     Motion::Linear(point) | Motion::Direct(point) => put_value(b, point),
@@ -432,7 +412,7 @@ impl RobotController<'_> {
             .await
     }
 
-    pub async fn go_home(&mut self, motion_type: MotionType) -> Result<()> {
+    pub async fn go_home(&mut self, motion_type: MotionDiscriminants) -> Result<()> {
         self.0
             .execute_command(RobotCommand::ReturnHome(motion_type))
             .await
@@ -452,12 +432,12 @@ impl RobotController<'_> {
     }
 }
 
-impl MotionType {
+impl MotionDiscriminants {
     pub fn id(&self) -> u8 {
         match self {
-            MotionType::Linear => 0,
-            MotionType::Direct => 1,
-            MotionType::Joint => 2,
+            MotionDiscriminants::Linear => 0,
+            MotionDiscriminants::Direct => 1,
+            MotionDiscriminants::Joint => 2,
         }
     }
 }
