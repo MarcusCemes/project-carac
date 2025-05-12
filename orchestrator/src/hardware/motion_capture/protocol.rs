@@ -123,7 +123,7 @@ impl Message {
 
         buf.put_u16_le(self.id);
         buf.put_u16_le(self.payload.len() as u16);
-        buf.put(&*self.payload);
+        buf.put(self.payload);
 
         Bytes::from(buf)
     }

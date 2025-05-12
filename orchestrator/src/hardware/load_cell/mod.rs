@@ -1,10 +1,11 @@
 use std::{
-    io, mem,
+    fmt, io, mem,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
 
-use bincode::{error::DecodeError, Decode, Encode};
+use async_trait::async_trait;
+use bincode::{Decode, Encode, error::DecodeError};
 use eyre::{Context, Result};
 use nalgebra::{Rotation3, Vector3};
 use reqwest::get;
@@ -13,10 +14,12 @@ use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::LoadCellConfig,
-    data::sink::{DataSink, StreamWriter},
+    data::sink::{DataSinkBuilder, StreamWriter},
     defs::Point,
     misc::network_config,
 };
+
+use super::HardwareAgent;
 
 const API_PATH: &str = "/netftapi2.xml";
 const PORT: u16 = 49152;
@@ -26,7 +29,7 @@ const BUFFER_SIZE: usize = 8192; // 8KB
 
 const STANDARD_FORCE_UNIT: &str = "N";
 const STANDARD_TORQUE_UNIT: &str = "Nm";
-const STREAM_NAME: &str = "load_cell";
+const NAME: &str = "load_cell";
 const CHANNELS: [&str; 6] = ["fx", "fy", "fz", "tx", "ty", "tz"];
 
 const DEVICE_CUTOFF_FREQ: [u32; 13] = [0, 838, 326, 152, 73, 35, 18, 8, 5, 1500, 2000, 2500, 3000];
@@ -120,16 +123,6 @@ impl LoadCell {
         Ok(LoadCell { inner, task })
     }
 
-    pub async fn subscribe(&self, sink: &DataSink) -> Result<()> {
-        let name = STREAM_NAME.to_owned();
-        let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream = sink.add_stream(name, channels).await?;
-
-        self.inner.shared.lock().await.stream = Some(stream);
-
-        Ok(())
-    }
-
     pub async fn execute(&self, instruction: LoadCellInstruction) -> Result<()> {
         match instruction {
             LoadCellInstruction::SetBias => self.set_bias().await,
@@ -216,6 +209,23 @@ impl LoadCell {
 
             buf.clear();
         }
+    }
+}
+
+#[async_trait]
+impl HardwareAgent for LoadCell {
+    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+        let name = NAME.to_owned();
+        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let stream = sink.register_stream(name, channels).await;
+
+        self.inner.shared.lock().await.stream = Some(stream);
+    }
+}
+
+impl fmt::Display for LoadCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{NAME}")
     }
 }
 

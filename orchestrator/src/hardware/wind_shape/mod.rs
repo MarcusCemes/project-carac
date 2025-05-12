@@ -1,16 +1,19 @@
 use std::{
-    iter,
+    fmt, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str,
     sync::Arc,
     time::Duration,
 };
 
-use eyre::{eyre, Context, Result};
+use async_trait::async_trait;
+use eyre::{Context, Result, eyre};
 use serde::{Deserialize, Serialize};
 use tokio::{io, net::UdpSocket, select, sync::watch, task::JoinSet, time::interval};
 
-use crate::config::WindShapeConfig;
+use crate::{config::WindShapeConfig, data::sink::DataSinkBuilder};
+
+use super::HardwareAgent;
 
 const MODULE_COUNT: usize = 56;
 const MODULE_FANS: usize = 18;
@@ -18,8 +21,9 @@ const MODULE_FANS: usize = 18;
 const LOCAL_PORT: u16 = 60333;
 const REMOTE_PORT: u16 = 60334;
 
-const STATUS_INTERVAL: Duration = Duration::from_millis(40);
+const NAME: &str = "wind_shape";
 
+const STATUS_INTERVAL: Duration = Duration::from_millis(40);
 const RX_BUFFER_SIZE: usize = 65536;
 
 pub struct WindShape {
@@ -30,8 +34,7 @@ pub struct WindShape {
     request_control: watch::Sender<bool>,
     status: watch::Receiver<Status>,
 
-    #[allow(dead_code)]
-    task_handle: JoinSet<()>,
+    tasks: JoinSet<()>,
 }
 
 #[derive(Clone)]
@@ -103,7 +106,7 @@ impl WindShape {
             request_control,
 
             status,
-            task_handle,
+            tasks: task_handle,
         })
     }
 
@@ -243,6 +246,23 @@ impl WindShape {
                 }
             }
         }
+    }
+}
+
+impl fmt::Display for WindShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{NAME}")
+    }
+}
+
+#[async_trait]
+impl HardwareAgent for WindShape {
+    async fn register(&mut self, _sink: &mut DataSinkBuilder) {}
+}
+
+impl Drop for WindShape {
+    fn drop(&mut self) {
+        self.tasks.abort_all();
     }
 }
 

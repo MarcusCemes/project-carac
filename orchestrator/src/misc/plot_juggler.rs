@@ -6,7 +6,7 @@ use std::{
 use eyre::Result;
 use serde::Serialize;
 
-use crate::data::run::{RunSample, StreamInfo};
+use crate::data::sink::StreamInfo;
 
 const DEFAULT_PORT: u16 = 9870;
 
@@ -20,6 +20,7 @@ pub struct PlotJugglerBroadcaster {
 #[derive(Debug, Serialize)]
 struct Message {
     ts: f32,
+
     #[serde(flatten)]
     fields: HashMap<String, f32>,
 }
@@ -38,9 +39,11 @@ impl PlotJugglerBroadcaster {
         Ok(PlotJugglerBroadcaster { addr, socket })
     }
 
-    pub fn send(&self, sample: &RunSample, streams: &[StreamInfo]) -> Result<()> {
-        let message = Message::new(sample, streams);
-        let buffer = serde_json::to_vec(&message)?;
+    pub fn send(&self, ts: f32, channel_data: &[f32], streams: &StreamInfo) -> Result<()> {
+        let buffer = serde_json::to_vec(&Message {
+            ts,
+            fields: fields(channel_data, streams),
+        })?;
 
         self.socket.send_to(&buffer, self.addr)?;
 
@@ -48,16 +51,10 @@ impl PlotJugglerBroadcaster {
     }
 }
 
-impl Message {
-    fn new(sample: &RunSample, streams: &[StreamInfo]) -> Self {
-        Message {
-            ts: sample.time_s(),
-
-            fields: streams
-                .iter()
-                .flat_map(StreamInfo::qualified_channel_names)
-                .zip(sample.channel_data.iter().copied())
-                .collect(),
-        }
-    }
+fn fields(channel_data: &[f32], stream: &StreamInfo) -> HashMap<String, f32> {
+    stream
+        .qualified_channel_names()
+        .into_iter()
+        .zip(channel_data.iter().copied())
+        .collect()
 }

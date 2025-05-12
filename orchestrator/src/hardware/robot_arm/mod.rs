@@ -1,29 +1,30 @@
 use std::{
+    fmt,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
-use eyre::{bail, eyre, Report, Result};
+use eyre::{Report, Result, bail, eyre};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumDiscriminants};
 use thiserror::Error;
 use tokio::{
     net::UdpSocket,
     select,
-    sync::{oneshot, watch, Mutex},
+    sync::{Mutex, oneshot, watch},
     task::JoinHandle,
 };
 
 use crate::{
     config::RobotArmConfig,
-    data::sink::{DataSink, StreamWriter},
+    data::sink::{DataSinkBuilder, StreamWriter},
     defs::*,
+    hardware::HardwareAgent,
     misc::network_config,
 };
-
-use super::HardwareAgent;
 
 const NAME: &str = "robot_arm";
 const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
@@ -39,10 +40,9 @@ pub struct RobotArm {
 
 struct Inner {
     error: watch::Sender<Option<u16>>,
-    moving: watch::Sender<bool>,
-    pose: watch::Sender<Option<Pose>>,
     shared: Mutex<Shared>,
     socket: UdpSocket,
+    state: watch::Sender<Option<State>>,
 }
 
 #[derive(Default)]
@@ -56,24 +56,23 @@ struct Shared {
 enum Response {
     Ack(u8),
     Error(u16),
-    Moving(RobotMoving),
+    Motion(MotionState),
     PowerOff,
-    Status(RobotStatus),
-}
-
-#[derive(Debug)]
-struct RobotMoving {
-    settled: bool,
-    queue_empty: bool,
+    Status(State),
 }
 
 #[derive(Debug, Decode)]
-struct RobotStatus {
-    settled: bool,
-    empty: bool,
+struct State {
+    motion: MotionState,
     position: Point,
     pose: Joint,
     error: Joint,
+}
+
+#[derive(Debug, Decode)]
+struct MotionState {
+    settled: bool,
+    idle: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -103,29 +102,12 @@ impl RobotArm {
         Self::handshake(&socket).await?;
 
         let (error, _) = watch::channel(None);
-        let (moving, _) = watch::channel(false);
-        let (status, _) = watch::channel(None);
+        let (state, _) = watch::channel(None);
 
-        let inner = Arc::new(Inner::new(
-            error.clone(),
-            moving.clone(),
-            status.clone(),
-            socket,
-        ));
-
+        let inner = Arc::new(Inner::new(error, socket, state));
         let task = tokio::spawn(Self::robot_arm_task(inner.clone()));
 
         Ok(RobotArm { inner, task })
-    }
-
-    pub async fn register(&self, sink: &DataSink) -> Result<()> {
-        let name = NAME.to_owned();
-        let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream = sink.add_stream(name, channels).await?;
-
-        self.inner.shared.lock().await.stream = Some(stream);
-
-        Ok(())
     }
 
     pub async fn execute(&mut self, instruction: RobotArmInstruction) -> Result<()> {
@@ -193,13 +175,17 @@ impl RobotArm {
 
     pub async fn try_wait_settled(&self) -> Result<(), RobotArmError> {
         let mut error = self.inner.error.subscribe();
-        let mut moving = self.inner.moving.subscribe();
+        let mut state = self.inner.state.subscribe();
 
         let error_task = error.wait_for(Option::is_some);
 
         let moving_task = async {
-            moving.wait_for(|m| *m).await?;
-            moving.wait_for(|m| !*m).await?;
+            for v in [false, true] {
+                state
+                    .wait_for(|s| s.as_ref().is_some_and(|s| s.motion.settled == v))
+                    .await?;
+            }
+
             Result::<(), watch::error::RecvError>::Ok(())
         };
 
@@ -219,9 +205,8 @@ impl RobotArm {
             inner.socket.recv_buf(&mut buf).await?;
 
             match Response::decode(&buf[..])? {
-                Response::Status(report) => {
-                    inner.moving.send_replace(true);
-                    inner.pose.send_replace(Some(Pose::from(report.position)));
+                Response::Status(state) => {
+                    inner.state.send_replace(Some(state));
                 }
 
                 Response::Ack(id) => {
@@ -238,8 +223,13 @@ impl RobotArm {
                     inner.error.send(Some(code)).ok();
                 }
 
-                Response::Moving(moving) => {
-                    inner.moving.send(!moving.settled).ok();
+                Response::Motion(motion) => {
+                    tracing::debug!("Got motion state: {}", motion.settled);
+                    inner.state.send_modify(|maybe_state| {
+                        if let Some(state) = maybe_state {
+                            state.motion = motion;
+                        }
+                    });
                 }
 
                 Response::PowerOff => {
@@ -252,28 +242,43 @@ impl RobotArm {
     }
 }
 
+#[async_trait]
 impl HardwareAgent for RobotArm {
-    async fn errored(&mut self) -> Option<Report> {
-        self.inner
-            .error
-            .borrow()
-            .map(|code| eyre!("Robot error (code {code})"))
+    async fn error(&mut self) -> Result<(), Report> {
+        match *self.inner.error.borrow() {
+            Some(code) => bail!("Robot error (code {code})"),
+            None => Ok(()),
+        }
     }
 
-    async fn on_record(&mut self) {
+    async fn start(&mut self) {
         self.execute_command(RobotCommand::SetReporting(true))
             .await
             .ok();
     }
 
-    async fn on_pause(&mut self) {
+    async fn stop(&mut self) {
         self.execute_command(RobotCommand::SetReporting(false))
             .await
             .ok();
     }
 
-    async fn reset(&mut self) {
+    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+        let name = NAME.to_owned();
+        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let stream = sink.register_stream(name, channels).await;
+
+        self.inner.shared.lock().await.stream = Some(stream);
+    }
+
+    async fn reset_error(&mut self) {
         self.inner.error.send_replace(None);
+    }
+}
+
+impl fmt::Display for RobotArm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{NAME}")
     }
 }
 
@@ -286,16 +291,14 @@ impl Drop for RobotArm {
 impl Inner {
     pub fn new(
         error: watch::Sender<Option<u16>>,
-        moving: watch::Sender<bool>,
-        pose: watch::Sender<Option<Pose>>,
         socket: UdpSocket,
+        state: watch::Sender<Option<State>>,
     ) -> Self {
         Inner {
             error,
-            moving,
-            pose,
             shared: Mutex::new(Shared::default()),
             socket,
+            state,
         }
     }
 }
@@ -425,6 +428,10 @@ impl RobotController<'_> {
     }
 
     pub async fn wait_settled(&self) -> Result<()> {
+        if self.0.inner.state.borrow().is_none() {
+            tracing::warn!("Robot is not reporting state! This may not complete.")
+        }
+
         self.0
             .try_wait_settled()
             .await
@@ -458,10 +465,11 @@ impl Response {
                 Response::Status(status)
             }
 
-            0x02 => Response::Moving(RobotMoving {
+            0x02 => Response::Motion(MotionState {
                 settled: buf.get_u8() != 0,
-                queue_empty: buf.get_u8() != 0,
+                idle: buf.get_u8() != 0,
             }),
+
             0x03 => Response::PowerOff,
 
             0xFE => {

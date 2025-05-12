@@ -1,6 +1,7 @@
-use std::{future::Future, time::Duration};
+use std::{fmt::Display, future::Future, time::Duration};
 
-use eyre::{eyre, Context, Report, Result};
+use async_trait::async_trait;
+use eyre::{Context, Report, Result, eyre};
 use load_cell::LoadCell;
 use motion_capture::MotionCapture;
 use robot_arm::RobotArm;
@@ -13,16 +14,20 @@ pub mod motion_capture;
 pub mod robot_arm;
 pub mod wind_shape;
 
-use crate::{config::HardwareConfig, misc::type_name};
+use crate::{config::HardwareConfig, data::sink::DataSinkBuilder, misc::type_name};
 
-pub trait HardwareAgent {
-    async fn errored(&mut self) -> Option<Report> {
-        None
+#[async_trait]
+pub trait HardwareAgent: Display + Send {
+    async fn register(&mut self, sink: &mut DataSinkBuilder);
+
+    async fn error(&mut self) -> Result<(), Report> {
+        Ok(())
     }
 
-    async fn on_pause(&mut self) {}
-    async fn on_record(&mut self) {}
-    async fn reset(&mut self) {}
+    async fn reset_error(&mut self) {}
+
+    async fn start(&mut self) {}
+    async fn stop(&mut self) {}
 }
 
 /* == HardwareContext == */
@@ -38,6 +43,14 @@ pub struct HardwareContext {
 impl HardwareContext {
     pub fn builder() -> HardwareContextBuilder {
         HardwareContextBuilder::default()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut dyn HardwareAgent> {
+        dynamic(&mut self.additional_devices)
+            .chain(dynamic(&mut self.motion_capture))
+            .chain(dynamic(&mut self.load_cell))
+            .chain(dynamic(&mut self.robot_arm))
+            .chain(dynamic(&mut self.wind_shape))
     }
 }
 
@@ -55,28 +68,28 @@ impl HardwareContextBuilder {
     }
 
     pub async fn build(self, config: &HardwareConfig) -> Result<HardwareContext> {
-        let fuse = HardwareInitializer::new(self.timeout);
+        let initialiser = HardwareInitializer::new(self.timeout);
 
-        let motion_capture = fuse
+        let motion_capture = initialiser
             .init(&config.motion_capture, MotionCapture::connect_from_config)
             .await?;
 
-        let load_cell = fuse
+        let load_cell = initialiser
             .init(&config.load_cell, LoadCell::connect_from_config)
             .await?;
 
-        let robot_arm = fuse
+        let robot_arm = initialiser
             .init(&config.robot_arm, RobotArm::connect_from_config)
             .await?;
 
-        let wind_shape = fuse
+        let wind_shape = initialiser
             .init(&config.wind_shape, WindShape::connect_from_config)
             .await?;
 
         let mut additional_devices = Vec::with_capacity(config.additional_devices.len());
 
         for device in &config.additional_devices {
-            let device = fuse
+            let device = initialiser
                 .init(&Some(device), |c| {
                     additional_device::Device::connect_from_config(c)
                 })
@@ -123,4 +136,14 @@ impl HardwareInitializer {
             None => None,
         })
     }
+}
+
+/// Helpful generic function that converts an iterable object of concrete HardwareAgent type (such as
+/// an Option or a Vec) and maps them to a trait object for dynamic dispatch using a v-table.
+fn dynamic<'a, T, U>(device: T) -> impl Iterator<Item = &'a mut dyn HardwareAgent>
+where
+    T: IntoIterator<Item = &'a mut U>,
+    U: HardwareAgent + 'a,
+{
+    device.into_iter().map(|d| d as &mut dyn HardwareAgent)
 }

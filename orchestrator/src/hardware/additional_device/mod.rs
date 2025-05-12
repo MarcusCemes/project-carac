@@ -1,12 +1,13 @@
-use std::{iter, mem, sync::Arc};
+use std::{fmt, iter, mem, sync::Arc};
 
+use async_trait::async_trait;
 use bytes::Buf;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::DeviceConfig,
-    data::sink::{DataSink, StreamWriter},
+    data::sink::{DataSinkBuilder, StreamWriter},
 };
 
 use super::HardwareAgent;
@@ -44,15 +45,6 @@ impl Device {
     pub fn config(&self) -> &DeviceConfig {
         &self.inner.config
     }
-
-    pub async fn subscribe(&self, sink: &DataSink) -> Result<()> {
-        let DeviceConfig { name, channels, .. } = &self.inner.config;
-        let stream = sink.add_stream(name.clone(), channels.clone()).await?;
-
-        *self.inner.stream.lock().await = Some(stream);
-
-        Ok(())
-    }
 }
 
 #[tracing::instrument(skip_all, fields(device = inner.config.name))]
@@ -78,7 +70,21 @@ async fn device_task(inner: Arc<Inner>) -> Result<()> {
     }
 }
 
-impl HardwareAgent for Device {}
+#[async_trait]
+impl HardwareAgent for Device {
+    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+        let DeviceConfig { name, channels, .. } = &self.inner.config;
+        let stream = sink.register_stream(name.clone(), channels.clone()).await;
+
+        *self.inner.stream.lock().await = Some(stream);
+    }
+}
+
+impl fmt::Display for Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Device ({})", self.inner.config.name)
+    }
+}
 
 impl Drop for Device {
     fn drop(&mut self) {

@@ -1,7 +1,7 @@
-use clap::{arg, Parser};
+use clap::{Parser, arg};
 use eyre::Result;
 
-use orchestrator::config::Config;
+use drone_lab::config::Config;
 
 #[derive(Parser)]
 struct Opts {
@@ -11,7 +11,7 @@ struct Opts {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> Result<()> {
-    orchestrator::init()?;
+    drone_lab::init()?;
 
     let opts = Opts::parse();
     let config = Config::load(&opts.path).await?;

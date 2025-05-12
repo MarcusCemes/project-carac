@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use bincode::config::{standard, Config};
+use bincode::config::{Config, standard};
 use color_eyre::owo_colors::OwoColorize;
 
 pub mod buf;

@@ -1,43 +1,53 @@
-use std::{mem, time::Duration};
+use std::time::Duration;
 
-use eyre::{bail, ContextCompat, Result};
+use eyre::{ContextCompat, Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
 use crate::{
     config::Config,
-    data::{
-        experiment::{Experiment, ExperimentManager, ExperimentMetadata},
-        run::Run,
-        sink::DataSink,
-    },
+    data::{session::Session, sink::DataSink},
     hardware::{
-        load_cell::LoadCellInstruction, robot_arm::RobotArmInstruction,
-        wind_shape::WindShapeInstruction, HardwareContext,
+        HardwareAgent, HardwareContext, load_cell::LoadCellInstruction,
+        robot_arm::RobotArmInstruction, wind_shape::WindShapeInstruction,
     },
     misc::type_name,
 };
 
 pub struct Orchestrator {
     context: HardwareContext,
-    manager: ExperimentManager,
-    runs: Vec<Run>,
+    session: Session,
     sink: DataSink,
 }
 
 impl Orchestrator {
-    pub async fn create(config: Config, context: HardwareContext) -> Result<Self> {
+    pub async fn create(config: Config, mut context: HardwareContext) -> Result<Self> {
         let path = config.sink.session_path.wrap_err("Session path not set")?;
 
-        let manager = ExperimentManager::create(path).await?;
-        let sink = DataSink::new();
+        let (sink, streams) = DataSink::builder().with_context(&mut context).await.build();
+        let session = Session::create(path, streams).await?;
 
         Ok(Self {
             context,
-            manager,
-            runs: Vec::new(),
+            session,
             sink,
         })
+    }
+
+    pub async fn start(&mut self) {
+        for device in self.context.iter_mut() {
+            device.start().await;
+        }
+    }
+
+    pub async fn stop(&mut self) {
+        for device in self.context.iter_mut() {
+            device.stop().await;
+        }
+    }
+
+    pub fn context(&mut self) -> &mut HardwareContext {
+        &mut self.context
     }
 
     pub async fn execute(&mut self, instruction: Instruction) -> Result<()> {
@@ -67,20 +77,21 @@ impl Orchestrator {
         }
     }
 
-    pub async fn finish_experiment(&mut self, name: Option<String>) -> Result<Experiment> {
-        let experiment = Experiment::new(
-            ExperimentMetadata::new(name, self.sink.streams().await),
-            mem::take(&mut self.runs),
-        );
-
-        self.manager.save_experiment(&experiment).await?;
-
-        Ok(experiment)
+    pub async fn create_experiment(&mut self, name: String) -> Result<()> {
+        self.session.create_experiment(name).await
     }
 
-    pub async fn finish_run(&mut self) {
-        let run = self.sink.finish().await;
-        self.runs.push(run);
+    pub async fn finish_experiment(&mut self) {
+        self.session.close_experiment();
+    }
+
+    pub async fn start_run(&mut self) {
+        self.sink.start_recording().await;
+    }
+
+    pub async fn finish_run(&mut self) -> Result<()> {
+        let run = self.sink.stop_recording().await;
+        self.session.add_run(&run).await
     }
 }
 
@@ -97,9 +108,9 @@ pub enum Instruction {
 
 /* == Misc == */
 
-fn require_module<T>(module: &mut Option<T>) -> Result<&mut T> {
+fn require_module<T: HardwareAgent>(module: &mut Option<T>) -> Result<&mut T> {
     match module {
         Some(module) => Ok(module),
-        None => bail!("Module {} not enabled", type_name::<T>()),
+        None => bail!("Module {} not available", type_name::<T>()),
     }
 }

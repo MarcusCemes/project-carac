@@ -2,20 +2,16 @@ use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
-use tokio::{io, task::JoinSet, time::sleep};
+use tokio::{task::JoinSet, time::sleep};
 
-use orchestrator::{
-    data::{
-        experiment::{Experiment, ExperimentMetadata},
-        run::{RunSample, StreamInfo},
-        sink::DataSink,
-    },
+use drone_lab::{
+    data::sink::{DataSink, StreamInfo},
     defs::Point,
     hardware::{
+        HardwareAgent,
         example_counter::ExampleCounter,
         robot_arm::{Motion, MotionDiscriminants, RobotArm, SpeedProfile},
         wind_shape::WindShape,
-        HardwareAgent,
     },
     misc::plot_juggler::PlotJugglerBroadcaster,
 };
@@ -38,7 +34,7 @@ enum Command {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> Result<()> {
-    orchestrator::init()?;
+    drone_lab::init()?;
 
     let opts = Opts::parse();
 
@@ -53,28 +49,31 @@ pub async fn main() -> Result<()> {
 /* == Counter == */
 
 pub async fn counter() -> Result<()> {
-    let sink = DataSink::new();
+    let mut builder = DataSink::builder();
 
-    let mut mock0 = ExampleCounter::new();
-    mock0.subscribe(&sink, "counter0".to_owned()).await?;
+    let mut mock0 = ExampleCounter::new("counter0".to_owned());
+    mock0.register(&mut builder).await;
 
-    let mut mock1 = ExampleCounter::new();
-    mock1.subscribe(&sink, "counter1".to_owned()).await?;
+    let mut mock1 = ExampleCounter::new("counter1".to_owned());
+    mock1.register(&mut builder).await;
 
-    let null_handle = sink
-        .add_stream(
+    let null_handle = builder
+        .register_stream(
             "null".to_owned(),
-            vec!["null0".to_owned(), "null1".to_owned()],
+            ["null0", "null1"].map(str::to_owned).to_vec(),
         )
-        .await?;
+        .await;
 
-    sink.clear().await;
+    let (sink, _streams) = builder.build();
+
+    let broadcaster = PlotJugglerBroadcaster::create(None, None);
+    sink.set_broadcaster(broadcaster.ok()).await;
 
     // This will not get recorded
     null_handle.add(&[0., f32::NAN]).await;
 
     tracing::info!("Recording...");
-    sink.set_record(true).await;
+    sink.start_recording().await;
 
     // This will get recorded
     null_handle.add(&[1., f32::NAN]).await;
@@ -82,16 +81,14 @@ pub async fn counter() -> Result<()> {
     sleep(Duration::from_secs_f32(1.6)).await;
 
     tracing::info!("Stopping recording...");
-    sink.set_record(false).await;
+    let _run = sink.stop_recording().await;
 
-    let run = sink.finish().await;
+    // let experiment = Experiment::new(
+    //     ExperimentMetadata::new(Some("Test Run".to_string()), sink.streams().await),
+    //     vec![run],
+    // );
 
-    let experiment = Experiment::new(
-        ExperimentMetadata::new(Some("Test Run".to_string()), sink.streams().await),
-        vec![run],
-    );
-
-    experiment.write(&mut io::stdout()).await?;
+    // experiment.write(&mut io::stdout()).await?;
 
     Ok(())
 }
@@ -103,7 +100,7 @@ pub async fn plot_juggler() -> Result<()> {
 
     let mock_streams = Arc::new(["counter0", "counter1"].map(|name| StreamInfo {
         name: name.to_string(),
-        channels: vec!["count".to_string()],
+        channels: ["count"].map(str::to_owned).to_vec(),
     }));
 
     let mut set = JoinSet::new();
@@ -133,12 +130,12 @@ async fn plot_juggler_task(
         let t = 1e-2 * (time as f32) + stream_id_f32;
         let v = t.sin() / stream_id_f32;
 
-        let data = RunSample {
-            channel_data: &[v],
-            delta_us: (1e5 * t) as u32,
-        };
+        // let data = RunSample {
+        //     channel_data: &[v],
+        //     delta_us: (1e5 * t) as u32,
+        // };
 
-        plot.send(&data, &*streams)?;
+        plot.send(t, &[v], &streams[stream_id])?;
 
         sleep(Duration::from_micros(100)).await;
     }
@@ -164,7 +161,7 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
         .await
         .wrap_err("Failed to connect to RobotArm")?;
 
-    robot_arm.on_record().await;
+    robot_arm.start().await;
 
     let mut r = robot_arm.controller();
 
@@ -250,7 +247,7 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     r.go_home(MotionDiscriminants::Direct).await?;
     r.wait_settled().await?;
 
-    robot_arm.on_pause().await;
+    robot_arm.stop().await;
 
     Ok(())
 }

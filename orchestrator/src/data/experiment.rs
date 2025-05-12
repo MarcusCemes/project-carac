@@ -1,150 +1,250 @@
-use std::path::PathBuf;
+use std::iter;
 
-use eyre::{bail, Context, Result};
-use tokio::{
-    fs,
-    io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-};
+use bincode::{Decode, Encode};
+use bytes::{Buf, BufMut};
+use eyre::{Context, ContextCompat, Result, bail};
+use polars::prelude::*;
+use tokio::io::{self, AsyncRead, AsyncReadExt};
 
 use crate::{
-    data::run::{Run, StreamInfo},
-    misc::buf::{ReadExt, WriteExt},
+    data::{sink::StreamInfo, time::SegmentedRecordingIterator},
+    misc::standard_config,
 };
 
 /* === Definitions === */
 
-pub struct ExperimentManager {
-    experiment_counter: u32,
-    path: PathBuf,
-}
+const MAGIC_NUMBER: [u8; 4] = *b"EXPT";
+const FORMAT_VERSION: u8 = 1;
 
+#[derive(Clone, Debug)]
 pub struct Experiment {
-    pub metadata: ExperimentMetadata,
+    pub header: ExperimentHeader,
     pub runs: Vec<Run>,
 }
 
-pub struct ExperimentMetadata {
-    pub name: Option<String>,
-    pub timestamp_ms: i64,
-    pub streams: Vec<StreamInfo>,
+#[derive(Clone, Debug, Decode, Encode)]
+pub struct ExperimentHeader {
+    magic_number: [u8; 4],
+    version: u8,
+    pub name: String,
+    pub streams: Box<[u8]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Run {
+    pub recorded_streams: Vec<RecordedStream>,
+}
+
+#[derive(Clone, Debug, Decode, Encode)]
+pub struct RecordedStream {
+    pub channel_data: Vec<f32>,
+    pub timestamps: Vec<u32>,
+}
+
+pub struct RunSample<'a> {
+    pub channel_data: &'a [f32],
+    pub delta_us: u32,
 }
 
 /* === Implementations === */
 
-impl ExperimentManager {
-    pub async fn create(path: PathBuf) -> Result<Self> {
-        if path.exists() {
-            bail!("Path already exists: {}", path.display());
-        }
+impl Experiment {
+    pub fn stream_names(&self, streams: Option<&[StreamInfo]>) -> impl Iterator<Item = String> {
+        let streams = streams.unwrap_or(&[]);
 
-        Ok(Self {
-            experiment_counter: 0,
-            path,
+        (0..self.header.streams.len()).map(move |i| {
+            streams
+                .get(i)
+                .map_or_else(|| format!("stream_{}", i), |s| s.name.clone())
         })
     }
 
-    pub async fn save_experiment(&mut self, experiment: &Experiment) -> Result<()> {
-        let experiment_path = self
-            .path
-            .join(format!("experiment_{}", self.experiment_counter));
+    pub fn decode<B: Buf>(buf: &mut B) -> Result<Self> {
+        let header: ExperimentHeader =
+            bincode::decode_from_std_read(&mut buf.reader(), standard_config())?;
 
-        let file = fs::File::create(&experiment_path)
-            .await
-            .wrap_err("Failed to open experiment file")?;
-
-        let mut writer = io::BufWriter::new(file);
-
-        experiment.write(&mut writer).await?;
-
-        self.experiment_counter += 1;
-
-        Ok(())
-    }
-}
-
-impl Experiment {
-    pub fn new(metadata: ExperimentMetadata, runs: Vec<Run>) -> Self {
-        Self { metadata, runs }
-    }
-
-    pub async fn read<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Self> {
-        let metadata = ExperimentMetadata::read(r).await?;
-
-        let n_runs = r.read_u16().await? as usize;
-        let mut runs = Vec::with_capacity(n_runs);
-
-        for _ in 0..n_runs {
-            let run = Run::read(r, &metadata.streams).await?;
-            runs.push(run);
+        if header.magic_number != MAGIC_NUMBER {
+            bail!("Invalid magic number");
         }
 
-        Ok(Experiment { metadata, runs })
+        if header.version != FORMAT_VERSION {
+            bail!("Unsupported format version");
+        }
+
+        let runs = iter::from_fn(|| {
+            buf.has_remaining()
+                .then(|| Run::decode(buf, &header.streams))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+        Ok(Experiment { header, runs })
     }
 
-    pub async fn write<W: AsyncWrite + Unpin>(&self, w: &mut W) -> io::Result<()> {
-        self.metadata.write(w).await?;
-
-        w.write_u16(self.runs.len() as u16).await?;
+    pub fn encode<B: BufMut>(&self, buf: &mut B) -> Result<()> {
+        bincode::encode_into_std_write(&self.header, &mut buf.writer(), standard_config())?;
 
         for run in &self.runs {
-            run.write(w).await?;
+            run.encode(buf)?;
         }
 
         Ok(())
     }
 }
 
-impl ExperimentMetadata {
-    pub fn new(name: Option<String>, streams: Vec<StreamInfo>) -> Self {
+impl ExperimentHeader {
+    pub fn new(name: String, streams: Box<[u8]>) -> Self {
         Self {
+            magic_number: MAGIC_NUMBER,
+            version: FORMAT_VERSION,
             name,
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
             streams,
         }
     }
+}
 
-    pub async fn read<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Self> {
-        let timestamp_ms = r.read_i64().await?;
-
-        let name = match r.read_u8().await? {
-            0 => None,
-            _ => Some(r.read_string().await?),
-        };
-
-        let n_streams = r.read_u8().await? as usize;
-        let mut streams = Vec::with_capacity(n_streams);
-
-        for _ in 0..n_streams {
-            let stream = StreamInfo::read(r).await?;
-
-            streams.push(stream);
-        }
-
-        Ok(Self {
-            name,
-            timestamp_ms,
-            streams,
-        })
+impl Run {
+    pub fn new(recorded_streams: Vec<RecordedStream>) -> Self {
+        Self { recorded_streams }
     }
 
-    pub async fn write<W: AsyncWrite + Unpin>(&self, w: &mut W) -> io::Result<()> {
-        w.write_i64(self.timestamp_ms).await?;
+    pub fn segment<'a>(
+        &'a self,
+        streams: &'a [StreamInfo],
+        divisions: u32,
+    ) -> Option<SegmentedRecordingIterator<'a>> {
+        SegmentedRecordingIterator::new(self, streams, divisions)
+    }
 
-        match self.name {
-            Some(ref name) => {
-                w.write_u8(1).await?;
-                w.write_string(name).await?
+    pub fn dataframe(&self, streams: &[StreamInfo], divisions: u32) -> Result<DataFrame> {
+        let n_channels = streams.iter().map(|s| s.channels.len()).sum();
+
+        let mut data_buffer = vec![0.; n_channels];
+        let mut time_series = Vec::with_capacity(divisions as usize);
+
+        let mut series = iter::repeat_with(|| Vec::with_capacity(divisions as usize))
+            .take(n_channels)
+            .collect::<Vec<_>>();
+
+        let mut iterator = self
+            .segment(streams, divisions)
+            .wrap_err("Segmentation failed")?;
+
+        while let Some(time) = iterator.next(&mut data_buffer) {
+            for (data, series) in data_buffer.iter().zip(series.iter_mut()) {
+                series.push(*data);
             }
 
-            None => w.write_u8(0).await?,
+            time_series.push(time);
         }
 
-        w.write_u8(self.streams.len() as u8).await?;
+        let time_column =
+            ChunkedArray::<Float32Type>::from_vec("time".into(), time_series).into_column();
 
-        for stream in &self.streams {
-            stream.write(w).await?;
+        let channel_columns = series
+            .into_iter()
+            .zip(streams.iter().flat_map(|s| s.qualified_channel_names()))
+            .map(|(series, name)| {
+                ChunkedArray::<Float32Type>::from_vec(name.into(), series).into_column()
+            });
+
+        let columns = iter::once(time_column).chain(channel_columns).collect();
+
+        DataFrame::new(columns).wrap_err("Failed to create DataFrame")
+    }
+
+    pub async fn read<R: AsyncRead + Unpin>(r: &mut R, streams: &[StreamInfo]) -> io::Result<Self> {
+        let mut recorded_streams = Vec::new();
+
+        for stream in streams {
+            let n_timestamps = r.read_u32().await? as usize;
+            let n_samples = n_timestamps * stream.channels.len();
+
+            let mut timestamps = Vec::with_capacity(n_timestamps);
+            let mut channel_data = Vec::with_capacity(n_samples);
+
+            for _ in 0..n_timestamps {
+                timestamps.push(r.read_u32().await?);
+            }
+
+            for _ in 0..n_samples {
+                channel_data.push(r.read_f32().await?);
+            }
+
+            recorded_streams.push(RecordedStream::new(timestamps, channel_data));
+        }
+
+        Ok(Self { recorded_streams })
+    }
+
+    pub fn decode<B: Buf>(buf: &mut B, channels: &[u8]) -> Result<Run> {
+        let mut recorded_streams = Vec::with_capacity(channels.len());
+
+        for &n_channels in channels {
+            let n_timestamps = buf.try_get_u32()? as usize;
+
+            let mut timestamps = Vec::with_capacity(n_timestamps);
+            let mut data = Vec::with_capacity(n_channels as usize * n_timestamps);
+
+            for _ in 0..n_timestamps {
+                timestamps.push(buf.try_get_u32()?);
+
+                for _ in 0..n_channels {
+                    data.push(buf.try_get_f32()?);
+                }
+            }
+
+            recorded_streams.push(RecordedStream::new(timestamps, data));
+        }
+
+        Ok(Run { recorded_streams })
+    }
+
+    pub fn encode<B: BufMut>(&self, buf: &mut B) -> Result<()> {
+        for stream in &self.recorded_streams {
+            buf.put_u32(stream.timestamps.len() as u32);
+
+            for (timestamp, data) in stream
+                .timestamps
+                .iter()
+                .zip(stream.channel_data.chunks_exact(stream.n_channels()))
+            {
+                buf.put_u32(*timestamp);
+
+                for datum in data {
+                    buf.put_f32(*datum);
+                }
+            }
         }
 
         Ok(())
+    }
+}
+
+impl RecordedStream {
+    pub fn new(timestamps: Vec<u32>, channel_data: Vec<f32>) -> Self {
+        Self {
+            timestamps,
+            channel_data,
+        }
+    }
+
+    pub fn iter_samples(&self) -> impl Iterator<Item = RunSample> {
+        self.timestamps
+            .iter()
+            .zip(self.channel_data.chunks_exact(self.n_channels()))
+            .map(|(&delta_us, channel_data)| RunSample {
+                channel_data,
+                delta_us,
+            })
+    }
+
+    pub fn n_channels(&self) -> usize {
+        self.channel_data.len() / self.timestamps.len().max(1) // panics if zero
+    }
+}
+
+impl RunSample<'_> {
+    pub fn time_s(&self) -> f32 {
+        self.delta_us as f32 * 1e-6
     }
 }

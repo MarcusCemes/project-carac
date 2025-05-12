@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    extract,
+    Json, Router, extract,
     routing::{get, post},
-    Json, Router,
 };
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -16,10 +16,12 @@ struct AppState {
 
 pub fn create_router(orchestrator: Orchestrator) -> Router {
     Router::new()
-        .route("/complete", get(complete))
         .route("/execute", post(execute))
-        .route("/reset", post(reset))
+        .route("/finish/experiment", post(finish_experiment))
+        .route("/finish/run", post(finish_run))
+        .route("/start", post(start))
         .route("/status", get(status))
+        .route("/stop", post(stop))
         .with_state(Arc::new(AppState {
             orchestrator: Mutex::new(orchestrator),
         }))
@@ -57,28 +59,36 @@ async fn execute(
     Json(ExecuteResponse::Success)
 }
 
-/* == Complete ==  */
+/* == Finish ==  */
 
-async fn complete(extract::State(_state): extract::State<Arc<AppState>>) -> Json<()> {
-    todo!()
-
-    // let orchestrator = state.orchestrator.lock().await;
-    // let recording = orchestrator.complete().await;
-
-    // Json(recording)
+async fn finish_experiment(extract::State(state): extract::State<Arc<AppState>>) {
+    state.orchestrator.lock().await.finish_experiment().await;
 }
 
-/* == Reset == */
+async fn finish_run(extract::State(state): extract::State<Arc<AppState>>) -> Result<(), String> {
+    state
+        .orchestrator
+        .lock()
+        .await
+        .finish_run()
+        .await
+        .map_err(|r| r.to_string())
+}
 
-async fn reset(extract::State(_state): extract::State<Arc<AppState>>) {
-    todo!()
+/* == Start == */
 
-    // let mut orchestrator = state.orchestrator.lock().await;
-    // orchestrator.reset().await;
+async fn start(extract::State(state): extract::State<Arc<AppState>>) {
+    state.orchestrator.lock().await.start().await;
 }
 
 /* == Status == */
 
 async fn status() -> &'static str {
     "Healthy"
+}
+
+/* == Stop == */
+
+async fn stop(extract::State(state): extract::State<Arc<AppState>>) {
+    state.orchestrator.lock().await.stop().await;
 }

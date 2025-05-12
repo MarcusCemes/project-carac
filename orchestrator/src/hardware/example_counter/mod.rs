@@ -1,42 +1,57 @@
-use std::time::Duration;
+use std::{fmt, sync::Arc, time::Duration};
 
-use eyre::Result;
-use tokio::{task::JoinHandle, time::interval};
+use async_trait::async_trait;
+use tokio::{sync::Mutex, task::JoinHandle, time::interval};
 
-use crate::data::sink::{DataSink, StreamWriter};
+use crate::data::sink::{DataSinkBuilder, StreamWriter};
 
-#[derive(Default)]
+use super::HardwareAgent;
+
 pub struct ExampleCounter {
+    inner: Arc<Mutex<Option<StreamWriter>>>,
+    name: String,
     task: Option<JoinHandle<()>>,
 }
 
 impl ExampleCounter {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new(name: String) -> Self {
+        let inner = Arc::new(Mutex::new(None));
+        let task = Some(tokio::spawn(Self::counter_task(inner.clone())));
 
-    pub async fn subscribe(&mut self, sink: &DataSink, name: String) -> Result<()> {
-        let channels = ["count"].map(str::to_owned).to_vec();
-        let stream = sink.add_stream(name, channels).await?;
-        let new_task = tokio::spawn(Self::counter_task(stream));
-
-        if let Some(task) = self.task.replace(new_task) {
-            task.abort();
-        }
-
-        Ok(())
+        ExampleCounter { inner, name, task }
     }
 
     #[tracing::instrument(skip_all)]
-    async fn counter_task(stream: StreamWriter) {
+    async fn counter_task(inner: Arc<Mutex<Option<StreamWriter>>>) {
         let mut counter = 0.;
         let mut clock = interval(Duration::from_millis(500));
 
         loop {
             clock.tick().await;
-            stream.add(&[counter]).await;
+
+            if let Some(stream) = inner.lock().await.as_ref() {
+                stream.add(&[counter]).await;
+            }
+
             counter += 1.;
         }
+    }
+}
+
+#[async_trait]
+impl HardwareAgent for ExampleCounter {
+    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+        let name = self.name.clone();
+        let channels = ["count"].map(str::to_owned).to_vec();
+        let stream = sink.register_stream(name, channels).await;
+
+        *self.inner.lock().await = Some(stream);
+    }
+}
+
+impl fmt::Display for ExampleCounter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Counter ({})", self.name)
     }
 }
 

@@ -1,8 +1,9 @@
 use std::{iter::Peekable, ops::RangeInclusive};
 
-use crate::data::run::{RecordedStream, RunSample};
-
-use super::run::{Run, StreamInfo};
+use crate::data::{
+    experiment::{RecordedStream, Run, RunSample},
+    sink::StreamInfo,
+};
 
 struct StreamInterpolator<'a> {
     channels: Vec<f32>,

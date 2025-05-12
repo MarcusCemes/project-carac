@@ -1,17 +1,21 @@
 use std::{
+    fmt,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use bytes::Bytes;
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use protocol::RigidBodyData;
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 
 use crate::{
     config::MotionCaptureConfig,
-    data::sink::{DataSink, StreamWriter},
+    data::sink::{DataSinkBuilder, StreamWriter},
 };
+
+use super::HardwareAgent;
 
 pub mod protocol;
 
@@ -38,7 +42,8 @@ struct MotionCaptureInner {
 
 struct Subscription {
     id: i32,
-    stream: StreamWriter,
+    name: String,
+    stream: Option<StreamWriter>,
 }
 
 #[derive(Debug)]
@@ -49,7 +54,13 @@ enum TaskError {
 
 impl MotionCapture {
     pub async fn connect_from_config(config: &MotionCaptureConfig) -> Result<Self> {
-        Self::connect(config.ip, config.multicast_ip).await
+        let module = Self::connect(config.ip, config.multicast_ip).await?;
+
+        for body in &config.rigid_bodies {
+            module.subscribe(body.clone()).await?;
+        }
+
+        Ok(module)
     }
 
     pub async fn connect(ip: IpAddr, multicast_ip: Ipv4Addr) -> Result<Self> {
@@ -75,46 +86,30 @@ impl MotionCapture {
         Ok(MotionCapture { inner, task })
     }
 
-    pub async fn subscribe(&self, name: &str, sink: &DataSink) -> Result<()> {
-        let description_lock = self.inner.description.lock().await;
+    pub async fn subscribe(&self, name: String) -> Result<()> {
+        let lock = self.inner.description.lock().await;
 
-        let Some(rigid_body) = description_lock.get_rb_name(name) else {
+        let Some(rigid_body) = lock.get_rb_name(&name) else {
             bail!("Rigid body {name} not found");
         };
 
-        let mut subscription_lock = self.inner.subscriptions.lock().await;
+        let mut lock = self.inner.subscriptions.lock().await;
 
-        if subscription_lock.iter().any(|s| s.id == rigid_body.id) {
+        if lock.iter().any(|s| s.id == rigid_body.id) {
             tracing::warn!("Already subscribed to rigid body: {name}");
             return Ok(());
         }
 
-        let name = format!("{NAME}/{name}");
-        let channels = CHANNELS.map(str::to_owned).to_vec();
-        let stream = sink.add_stream(name, channels).await?;
+        tracing::debug!("Subscribing to rigid body: {name}");
 
-        subscription_lock.push(Subscription::new(rigid_body.id, stream));
+        lock.push(Subscription {
+            id: rigid_body.id,
+            name,
+            stream: None,
+        });
 
         Ok(())
     }
-
-    // pub async fn unsubscribe(&self, name: &str, sink: &DataSink) -> bool {
-    //     let description_lock = self.inner.description.lock().await;
-
-    //     if let Some(rigid_body) = description_lock.get_rb_name(name) {
-    //         let mut lock = self.inner.subscriptions.lock().await;
-
-    //         if let Some(pos) = lock.iter().position(|s| s.id == rigid_body.id) {
-    //             lock.swap_remove(pos);
-
-    //             let stream_name = format!("{NAME}/{name}");
-    //             sink.remove_stream(&stream_name).await;
-    //             return true;
-    //         }
-    //     }
-
-    //     false
-    // }
 
     pub async fn refresh_descriptions(&self) -> Result<()> {
         let new_description = Self::get_model_definitions(&self.inner.socket).await?;
@@ -154,7 +149,7 @@ impl MotionCapture {
                 .await
                 .map_err(|_| TaskError::SocketClosed)?;
 
-            let frame = protocol::parse_message(&*buf)
+            let frame = protocol::parse_message(buf.as_ref())
                 .and_then(|msg| protocol::parse_frame_data(msg.payload))
                 .map_err(|_| TaskError::MalformedPacket)
                 .inspect_err(|e| {
@@ -166,8 +161,10 @@ impl MotionCapture {
 
                 for rb in frame.rigid_bodies {
                     if let Some(subscription) = subscriptions.iter().find(|s| s.id == rb.id) {
-                        let data: Data = rb.into();
-                        subscription.stream.add(&data).await;
+                        if let Some(stream) = &subscription.stream {
+                            let data: Data = rb.into();
+                            stream.add(&data).await;
+                        }
                     }
                 }
             }
@@ -216,16 +213,29 @@ impl MotionCapture {
     }
 }
 
+#[async_trait]
+impl HardwareAgent for MotionCapture {
+    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+        for subscription in &mut *self.inner.subscriptions.lock().await {
+            if subscription.stream.is_none() {
+                let name = format!("{NAME}/{}", subscription.name);
+                let channels = CHANNELS.map(str::to_owned).to_vec();
+                subscription.stream = Some(sink.register_stream(name, channels).await);
+            }
+        }
+    }
+}
+
+impl fmt::Display for MotionCapture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{NAME}")
+    }
+}
+
 impl Drop for MotionCapture {
     fn drop(&mut self) {
         tracing::warn!("Stopping motion capture task");
         self.task.abort();
-    }
-}
-
-impl Subscription {
-    pub fn new(id: i32, stream: StreamWriter) -> Self {
-        Subscription { id, stream }
     }
 }
 

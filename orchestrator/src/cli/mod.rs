@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use convert::ConvertOpts;
 use eyre::Result;
 
 mod convert;
@@ -16,8 +15,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    Convert(ConvertOpts),
-    View,
+    Convert(convert::ConvertOpts),
+    View(view::ViewOpts),
 
     Run {
         #[arg(short, long, default_value = "config.yaml")]
@@ -47,9 +46,9 @@ pub fn run() -> Result<()> {
 #[tokio::main]
 pub async fn execute_command(command: Command) -> Result<()> {
     match command {
-        Command::Convert(opts) => self::convert::segment(opts).await,
-        Command::Run { config } => self::run::launch(&config).await,
-        Command::Server { config, port } => self::server::start(&config, port).await,
-        Command::View => self::view::display_data().await,
+        Command::Convert(opts) => convert::segment(opts).await,
+        Command::Run { config } => run::launch(&config).await,
+        Command::Server { config, port } => server::start(&config, port).await,
+        Command::View(opts) => view::view(opts).await,
     }
 }

@@ -1,21 +1,29 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use clap::{Parser, ValueEnum};
-use eyre::{ContextCompat, Result};
+use eyre::{Context, ContextCompat, Result};
 use polars::prelude::*;
 
-use crate::data::experiment::Experiment;
+use crate::data::{session::Session, sink::StreamInfo};
 
 const DEFAULT_DIVISIONS: u32 = 100;
 
 #[derive(Clone, Debug, Parser)]
 pub struct ConvertOpts {
+    #[clap(short, long)]
+    pub path: PathBuf,
+
+    #[clap(short, long)]
+    pub experiment: u32,
+
+    #[clap(short, long, default_value_t = 0)]
+    pub run: u32,
+
     #[clap(short, long, default_value = "csv")]
     pub format: OutputFormat,
+
     #[clap(short, long, default_value_t = DEFAULT_DIVISIONS)]
     pub divisions: u32,
-    #[clap(short, long, default_value_t = 0)]
-    pub run: usize,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -26,14 +34,23 @@ pub enum OutputFormat {
 }
 
 pub async fn segment(opts: ConvertOpts) -> Result<()> {
-    let experiment = Experiment::read(&mut tokio::io::stdin()).await?;
+    let metadata = Session::read_metadata(&opts.path)
+        .await
+        .inspect_err(|_| tracing::warn!("Failed to read session metadata"))
+        .ok();
+
+    let experiment = Session::read_experiment(&opts.path, opts.experiment)
+        .await
+        .wrap_err("Experiment not found")?;
 
     let run = experiment
         .runs
-        .get(opts.run)
-        .wrap_err("Invalid run index")?;
+        .get(opts.run as usize)
+        .wrap_err("Run not found")?;
 
-    let mut df = run.dataframe(&experiment.metadata.streams, opts.divisions)?;
+    let streams = StreamInfo::use_or(metadata.as_deref(), &experiment.header.streams);
+
+    let mut df = run.dataframe(&streams, opts.divisions)?;
 
     match opts.format {
         OutputFormat::Csv => {
