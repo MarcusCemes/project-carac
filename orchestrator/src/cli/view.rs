@@ -3,20 +3,16 @@ use std::{mem, path::PathBuf};
 use clap::Parser;
 use eyre::Result;
 
-use crate::data::session::Session;
+use crate::data::{experiment::Experiment, session::SessionMetadata};
 
 #[derive(Parser)]
 pub struct ViewOpts {
-    #[arg(short, long)]
     path: PathBuf,
-
-    #[arg(short, long)]
-    id: u32,
 }
 
 pub async fn view(opts: ViewOpts) -> Result<()> {
-    let maybe_streams = Session::read_metadata(&opts.path).await.ok();
-    let experiment = Session::read_experiment(&opts.path, opts.id).await?;
+    let experiment = Experiment::load(&opts.path).await?;
+    let maybe_metadata = SessionMetadata::find(&opts.path).await;
 
     println!("# == Metadata == #\n");
 
@@ -25,8 +21,8 @@ pub async fn view(opts: ViewOpts) -> Result<()> {
     println!("Runs     {}", experiment.runs.len());
     println!("\n\n# == Streams == #");
 
-    if let Some(streams) = &maybe_streams {
-        for stream in streams {
+    if let Some(metadata) = &maybe_metadata {
+        for stream in &metadata.streams {
             println!("\n{}", stream.name);
 
             for channel in &stream.channels {
@@ -42,7 +38,7 @@ pub async fn view(opts: ViewOpts) -> Result<()> {
             .recorded_streams
             .iter()
             .zip(experiment.header.streams.iter())
-            .zip(experiment.stream_names(maybe_streams.as_deref()))
+            .zip(experiment.stream_names(maybe_metadata.as_ref().map(|m| m.streams.as_slice())))
         {
             let n_samples = stream.timestamps.len();
             let size = n_samples * n_channels as usize * mem::size_of::<f32>();

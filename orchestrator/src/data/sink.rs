@@ -152,14 +152,12 @@ impl DataSink {
         Run::new(recorded_streams)
     }
 
-    pub async fn set_broadcaster(&self, plot_juggler: Option<PlotJugglerBroadcaster>) {
-        let msg = match plot_juggler {
-            Some(_) => "Broadcaster enabled",
-            None => "Broadcaster disabled",
-        };
+    pub async fn set_broadcaster(&self, plot_juggler: PlotJugglerBroadcaster) {
+        self.inner.shared.write().await.broadcaster = Some(Broadcaster::new(plot_juggler));
+    }
 
-        tracing::info!("{}", msg);
-        self.inner.shared.write().await.broadcaster = plot_juggler.map(Broadcaster::new);
+    pub async fn clear_broadcaster(&self) {
+        self.inner.shared.write().await.broadcaster = None;
     }
 }
 
@@ -190,20 +188,6 @@ impl StreamInfo {
             .iter()
             .map(|channel| format!("{}/{}", self.name, channel))
             .collect()
-    }
-
-    pub fn use_or(streams: Option<&[StreamInfo]>, channels: &[u8]) -> Vec<StreamInfo> {
-        match streams {
-            Some(streams) => Vec::from(streams),
-
-            None => channels
-                .iter()
-                .map(|&channel| StreamInfo {
-                    name: format!("stream_{:2}", channel),
-                    channels: vec![format!("channel_{:2}", channel)],
-                })
-                .collect(),
-        }
     }
 }
 

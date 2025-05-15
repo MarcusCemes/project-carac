@@ -94,7 +94,6 @@ struct NetFtApi2 {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
 pub enum LoadCellInstruction {
     SetBias,
     SetStreaming(bool),

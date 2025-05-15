@@ -1,15 +1,18 @@
-use std::iter;
+use std::{iter, path::Path};
 
 use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
+use chunked_bytes::ChunkedBytes;
 use eyre::{Context, ContextCompat, Result, bail};
 use polars::prelude::*;
-use tokio::io::{self, AsyncRead, AsyncReadExt};
+use tokio::{fs::File, io::AsyncReadExt};
 
 use crate::{
     data::{sink::StreamInfo, time::SegmentedRecordingIterator},
     misc::standard_config,
 };
+
+use super::session::SessionMetadata;
 
 /* === Definitions === */
 
@@ -49,6 +52,15 @@ pub struct RunSample<'a> {
 /* === Implementations === */
 
 impl Experiment {
+    pub async fn load(path: &Path) -> Result<Self> {
+        let mut file = File::open(path).await?;
+        let mut buf = ChunkedBytes::new();
+
+        file.read_buf(&mut buf).await?;
+
+        Self::decode(&mut buf).wrap_err("Failed to decode experiment")
+    }
+
     pub fn stream_names(&self, streams: Option<&[StreamInfo]>) -> impl Iterator<Item = String> {
         let streams = streams.unwrap_or(&[]);
 
@@ -57,6 +69,21 @@ impl Experiment {
                 .get(i)
                 .map_or_else(|| format!("stream_{}", i), |s| s.name.clone())
         })
+    }
+
+    pub fn guess_metadata(&self) -> SessionMetadata {
+        let streams = self
+            .header
+            .streams
+            .iter()
+            .enumerate()
+            .map(|(i, n)| StreamInfo {
+                name: format!("stream_{i:2}"),
+                channels: vec![format!("channel_{n:2}")],
+            })
+            .collect();
+
+        SessionMetadata { streams }
     }
 
     pub fn decode<B: Buf>(buf: &mut B) -> Result<Self> {
@@ -84,7 +111,7 @@ impl Experiment {
         bincode::encode_into_std_write(&self.header, &mut buf.writer(), standard_config())?;
 
         for run in &self.runs {
-            run.encode(buf)?;
+            run.encode(buf);
         }
 
         Ok(())
@@ -152,31 +179,10 @@ impl Run {
         DataFrame::new(columns).wrap_err("Failed to create DataFrame")
     }
 
-    pub async fn read<R: AsyncRead + Unpin>(r: &mut R, streams: &[StreamInfo]) -> io::Result<Self> {
-        let mut recorded_streams = Vec::new();
-
-        for stream in streams {
-            let n_timestamps = r.read_u32().await? as usize;
-            let n_samples = n_timestamps * stream.channels.len();
-
-            let mut timestamps = Vec::with_capacity(n_timestamps);
-            let mut channel_data = Vec::with_capacity(n_samples);
-
-            for _ in 0..n_timestamps {
-                timestamps.push(r.read_u32().await?);
-            }
-
-            for _ in 0..n_samples {
-                channel_data.push(r.read_f32().await?);
-            }
-
-            recorded_streams.push(RecordedStream::new(timestamps, channel_data));
-        }
-
-        Ok(Self { recorded_streams })
-    }
-
     pub fn decode<B: Buf>(buf: &mut B, channels: &[u8]) -> Result<Run> {
+        let block_size = buf.try_get_u32()? as usize;
+        let mut buf = buf.take(block_size);
+
         let mut recorded_streams = Vec::with_capacity(channels.len());
 
         for &n_channels in channels {
@@ -199,7 +205,11 @@ impl Run {
         Ok(Run { recorded_streams })
     }
 
-    pub fn encode<B: BufMut>(&self, buf: &mut B) -> Result<()> {
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
+        let old_buf = buf;
+
+        let mut buf = ChunkedBytes::new();
+
         for stream in &self.recorded_streams {
             buf.put_u32(stream.timestamps.len() as u32);
 
@@ -216,7 +226,8 @@ impl Run {
             }
         }
 
-        Ok(())
+        old_buf.put_u32(buf.remaining() as u32);
+        old_buf.put(buf);
     }
 }
 
@@ -238,8 +249,10 @@ impl RecordedStream {
             })
     }
 
+    /// Estimates the number of channels based on contained data. If there is
+    /// no data, assumes a single channel.
     pub fn n_channels(&self) -> usize {
-        self.channel_data.len() / self.timestamps.len().max(1) // panics if zero
+        self.channel_data.len().max(1) / self.timestamps.len().max(1)
     }
 }
 

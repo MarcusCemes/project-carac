@@ -1,4 +1,4 @@
-#![allow(async_fn_in_trait, dead_code)]
+#![allow(dead_code)]
 
 use std::io;
 
@@ -26,7 +26,7 @@ pub fn init() -> Result<()> {
     color_eyre::install()?;
 
     let env_filter = EnvFilter::builder()
-        .with_default_directive("orchestrator=debug".parse()?)
+        .with_default_directive("drone-lab=debug".parse()?)
         .from_env_lossy();
 
     tracing_subscriber::fmt()

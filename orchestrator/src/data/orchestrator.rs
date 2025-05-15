@@ -6,12 +6,12 @@ use tokio::time::sleep;
 
 use crate::{
     config::Config,
-    data::{session::Session, sink::DataSink},
+    data::{experiment::Run, session::Session, sink::DataSink},
     hardware::{
         HardwareAgent, HardwareContext, load_cell::LoadCellInstruction,
         robot_arm::RobotArmInstruction, wind_shape::WindShapeInstruction,
     },
-    misc::type_name,
+    misc::{plot_juggler::PlotJugglerBroadcaster, type_name},
 };
 
 pub struct Orchestrator {
@@ -25,7 +25,18 @@ impl Orchestrator {
         let path = config.sink.session_path.wrap_err("Session path not set")?;
 
         let (sink, streams) = DataSink::builder().with_context(&mut context).await.build();
-        let session = Session::create(path, streams).await?;
+
+        if let Some(config) = config.sink.plot_juggler {
+            let try_broadcaster = PlotJugglerBroadcaster::builder()
+                .with_config(&config)
+                .build();
+
+            if let Ok(broadcaster) = try_broadcaster {
+                sink.set_broadcaster(broadcaster).await;
+            }
+        }
+
+        let session = Session::open(path, streams).await?;
 
         Ok(Self {
             context,
@@ -50,55 +61,72 @@ impl Orchestrator {
         &mut self.context
     }
 
-    pub async fn execute(&mut self, instruction: Instruction) -> Result<()> {
+    pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
+        self.sink.start_recording().await;
+
+        for instruction in instructions {
+            self.execute_instruction(instruction).await?;
+        }
+
+        let run = self.sink.stop_recording().await;
+
+        self.session.append_run(&run).await?;
+
+        Ok(run)
+    }
+
+    async fn execute_instruction(&mut self, instruction: Instruction) -> Result<()> {
         match instruction {
             Instruction::LoadCell(instruction) => {
                 require_module(&mut self.context.load_cell)?
                     .execute(instruction)
-                    .await
+                    .await?;
             }
 
             Instruction::RobotArm(instruction) => {
                 require_module(&mut self.context.robot_arm)?
                     .execute(instruction)
-                    .await
+                    .await?;
             }
 
             Instruction::WindShape(instruction) => {
                 require_module(&mut self.context.wind_shape)?
                     .execute(instruction)
-                    .await
+                    .await?;
             }
 
             Instruction::Sleep(duration) => {
                 sleep(duration).await;
-                Ok(())
             }
         }
+
+        Ok(())
     }
 
-    pub async fn create_experiment(&mut self, name: String) -> Result<()> {
-        self.session.create_experiment(name).await
+    pub async fn new_experiment(&mut self, name: String) -> Result<()> {
+        self.session.new_experiment(name).await
     }
 
-    pub async fn finish_experiment(&mut self) {
-        self.session.close_experiment();
+    pub async fn save_experiment(&mut self) -> Result<()> {
+        self.session.save_experiment().await
     }
 
-    pub async fn start_run(&mut self) {
+    pub async fn new_run(&mut self) {
         self.sink.start_recording().await;
     }
 
-    pub async fn finish_run(&mut self) -> Result<()> {
+    pub async fn save_run(&mut self) -> Result<Run> {
         let run = self.sink.stop_recording().await;
-        self.session.add_run(&run).await
+
+        self.session.append_run(&run).await?;
+
+        Ok(run)
     }
 }
 
 /* == Instruction == */
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
 pub enum Instruction {
     LoadCell(LoadCellInstruction),
     RobotArm(RobotArmInstruction),

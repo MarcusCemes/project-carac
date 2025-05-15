@@ -72,7 +72,6 @@ enum ResponsePayload {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
 pub enum WindShapeInstruction {
     EnablePower(bool),
     ReleaseControl,

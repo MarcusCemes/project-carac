@@ -1,8 +1,8 @@
 use std::{fmt, marker::PhantomData};
 
 use serde::{
-    de::{self, Visitor},
     Deserialize, Deserializer,
+    de::{self, Visitor},
 };
 
 /// Useful deserializer function that will initialise a `null` value (such as a YAML field

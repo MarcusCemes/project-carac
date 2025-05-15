@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, time::Duration};
 
 use bincode::config::{Config, standard};
 use color_eyre::owo_colors::OwoColorize;
@@ -22,6 +22,11 @@ pub fn network_config() -> impl Config {
 pub fn type_name<T>() -> &'static str {
     let name = std::any::type_name::<T>();
     name.split("::").last().unwrap_or(name)
+}
+
+// Small helper function to sleep for a given number of f32 seconds.
+pub async fn sleep(seconds: f32) {
+    tokio::time::sleep(Duration::from_secs_f32(seconds)).await;
 }
 
 pub struct ColourDot(pub bool);

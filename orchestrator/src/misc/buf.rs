@@ -28,11 +28,11 @@ impl<T: BufMut> BufMutExt for T {
     }
 }
 
-pub trait ReadExt {
+pub(crate) trait ReadExt {
     async fn read_string(&mut self) -> io::Result<String>;
 }
 
-pub trait WriteExt {
+pub(crate) trait WriteExt {
     async fn write_string(&mut self, string: &str) -> io::Result<()>;
 }
 

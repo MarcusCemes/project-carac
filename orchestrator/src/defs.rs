@@ -1,5 +1,5 @@
 use bincode::{Decode, Encode};
-use quaternion::{euler_angles, Quaternion};
+use quaternion::{Quaternion, euler_angles};
 use serde::{Deserialize, Serialize};
 
 pub type Vec3<T> = [T; 3];
@@ -44,8 +44,8 @@ impl Point {
     };
 }
 
-impl From<Point> for Pose {
-    fn from(point: Point) -> Self {
+impl From<&Point> for Pose {
+    fn from(point: &Point) -> Self {
         Pose {
             position: [point.x, point.y, point.z],
             orientation: euler_angles(point.rx, point.ry, point.rz),

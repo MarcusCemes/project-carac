@@ -1,36 +1,157 @@
 use std::path::{Path, PathBuf};
 
+use bytes::BufMut;
 use chunked_bytes::ChunkedBytes;
-use eyre::{Context, Result, bail};
+use eyre::{Result, bail};
+use serde::{Deserialize, Serialize};
 use tokio::{
-    fs::{File, create_dir_all},
-    io::{AsyncReadExt, AsyncWriteExt},
+    fs::{self, File},
+    io::{self, AsyncReadExt, AsyncWriteExt},
 };
 
 use crate::{
-    data::{
-        experiment::{Experiment, Run},
-        sink::StreamInfo,
-    },
+    data::{experiment::Run, sink::StreamInfo},
     misc::standard_config,
 };
 
 use super::experiment::ExperimentHeader;
 
-const META_FILE: &str = "_meta.json";
-
 pub struct Session {
-    experiment: Option<File>,
-    experiment_counter: u32,
-    path: PathBuf,
-    streams: Vec<StreamInfo>,
+    metadata: SessionMetadata,
+    open_experiment: Option<(File, String)>,
+    root_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionMetadata {
+    pub streams: Vec<StreamInfo>,
 }
 
 impl Session {
-    pub async fn read_metadata(path: &Path) -> Result<Vec<StreamInfo>> {
-        let mut file = File::open(path.join(META_FILE))
-            .await
-            .wrap_err("Failed to open meta file")?;
+    const CHECKPOINTS_DIR: &str = "checkpoints";
+    const EXPERIMENTS_DIR: &str = "experiments";
+    const TEMP_EXPERIMENT_NAME: &str = "_current";
+
+    pub async fn open(path: PathBuf, streams: Vec<StreamInfo>) -> Result<Self> {
+        fs::create_dir_all(&path).await?;
+
+        let metadata = SessionMetadata { streams };
+        metadata.save(&path).await?;
+
+        let _ = fs::create_dir(path.join(Self::CHECKPOINTS_DIR)).await;
+        let _ = fs::create_dir(path.join(Self::EXPERIMENTS_DIR)).await;
+
+        Ok(Self {
+            metadata,
+            open_experiment: None,
+            root_path: path,
+        })
+    }
+
+    pub async fn new_experiment(&mut self, name: String) -> Result<()> {
+        let mut file = File::create(self.root_path.join(Self::TEMP_EXPERIMENT_NAME)).await?;
+        let mut buf = ChunkedBytes::new().writer();
+
+        let header = ExperimentHeader::new(name, self.metadata.channels());
+        bincode::encode_into_std_write(&header, &mut buf, standard_config()).unwrap();
+
+        file.write_all_buf(&mut buf.into_inner()).await?;
+
+        self.open_experiment = Some((file, header.name));
+
+        Ok(())
+    }
+
+    pub async fn append_run(&mut self, run: &Run) -> Result<()> {
+        let Some((file, _)) = &mut self.open_experiment else {
+            bail!("No experiment file open");
+        };
+
+        let mut buf = ChunkedBytes::new();
+        run.encode(&mut buf);
+
+        file.write_all_buf(&mut buf).await?;
+        file.flush().await?;
+
+        Ok(())
+    }
+
+    pub async fn save_experiment(&mut self) -> Result<()> {
+        let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
+
+        let Some((file, name)) = self.open_experiment.take() else {
+            bail!("No experiment file open");
+        };
+
+        drop(file);
+
+        let id = self.next_experiment_number().await?;
+        let name = Self::experiment_name(id, &name);
+
+        fs::rename(dir.join(Self::TEMP_EXPERIMENT_NAME), dir.join(&name)).await?;
+
+        Ok(())
+    }
+
+    pub fn metadata(&self) -> &SessionMetadata {
+        &self.metadata
+    }
+
+    fn experiment_name(id: u32, name: &str) -> String {
+        format!("exp_{id}_{name}")
+    }
+
+    async fn next_experiment_number(&self) -> Result<u32> {
+        let mut files = fs::read_dir(self.root_path.join(Self::EXPERIMENTS_DIR)).await?;
+        let mut max_id = 0;
+
+        while let Some(entry) = files.next_entry().await? {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(id) = Self::extract_id(name) {
+                    max_id = max_id.max(id);
+                }
+            }
+        }
+
+        Ok(max_id)
+    }
+
+    fn extract_id(name: &str) -> Option<u32> {
+        let rest = name.strip_prefix("exp_")?;
+        let (id, _) = rest.split_once('_')?;
+        id.parse().ok()
+    }
+}
+
+impl SessionMetadata {
+    pub const FILE_NAME: &str = "_meta.json";
+    const FIND_LEVELS: usize = 2;
+
+    pub fn new(streams: Vec<StreamInfo>) -> Self {
+        Self { streams }
+    }
+
+    pub async fn find(path: &Path) -> Option<Self> {
+        let mut iter = path.ancestors();
+        iter.next();
+
+        for _ in 0..Self::FIND_LEVELS {
+            match iter.next() {
+                Some(path) => {
+                    if let Ok(meta) = Self::load(path).await {
+                        return Some(meta);
+                    }
+                }
+
+                None => break,
+            }
+        }
+
+        None
+    }
+
+    pub async fn load(path: &Path) -> Result<SessionMetadata> {
+        let mut file = File::open(path.join(Self::FILE_NAME)).await?;
 
         let mut buf = String::new();
         file.read_to_string(&mut buf).await?;
@@ -38,75 +159,14 @@ impl Session {
         Ok(serde_json::from_str(&buf)?)
     }
 
-    pub async fn create(path: PathBuf, streams: Vec<StreamInfo>) -> Result<Self> {
-        create_dir_all(&path).await?;
+    async fn save(&self, path: &Path) -> io::Result<()> {
+        let mut file = File::create(path.join(Self::FILE_NAME)).await?;
 
-        let mut file = File::create_new(path.join(META_FILE))
-            .await
-            .wrap_err("Failed to create meta file")?;
-
-        file.write_all(&serde_json::to_vec(&streams)?).await?;
-        file.flush().await?;
-
-        Ok(Session {
-            experiment: None,
-            experiment_counter: 0,
-            path,
-            streams,
-        })
+        file.write_all(&serde_json::to_vec(self)?).await?;
+        file.flush().await
     }
 
-    pub async fn read_experiment(path: &Path, id: u32) -> Result<Experiment> {
-        let filename = format!("experiment_{}", id);
-        let path = path.join(&filename);
-
-        let mut buf = Vec::new();
-        let mut file = File::open(path).await?;
-
-        file.read_to_end(&mut buf).await?;
-
-        Experiment::decode(&mut &buf[..])
-    }
-
-    pub async fn create_experiment(&mut self, name: String) -> Result<()> {
-        let file_name = format!("experiment_{}", self.experiment_counter);
-        let path = self.path.join(&file_name);
-        let mut file = File::create_new(&path).await?;
-
-        let header = ExperimentHeader::new(name, self.stream_channels());
-        let header = bincode::encode_to_vec(&header, standard_config()).unwrap();
-
-        file.write_all(&header).await?;
-
-        self.experiment = Some(file);
-        self.experiment_counter += 1;
-
-        Ok(())
-    }
-
-    pub fn close_experiment(&mut self) {
-        self.experiment = None;
-    }
-
-    pub async fn add_run(&mut self, run: &Run) -> Result<()> {
-        let Some(experiment) = &mut self.experiment else {
-            bail!("No experiment file open");
-        };
-
-        let mut buf = ChunkedBytes::new();
-        run.encode(&mut buf)?;
-
-        experiment.write_all_buf(&mut buf).await?;
-        experiment.flush().await?;
-
-        Ok(())
-    }
-
-    pub fn streams(&self) -> &[StreamInfo] {
-        &self.streams
-    }
-
-    fn stream_channels(&self) -> Box<[u8]> {
+    fn channels(&self) -> Box<[u8]> {
         self.streams
             .iter()
             .map(|s| s.channels.len() as u8)

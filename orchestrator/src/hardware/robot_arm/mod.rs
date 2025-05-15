@@ -2,6 +2,7 @@ use std::{
     fmt,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use tokio::{
     select,
     sync::{Mutex, oneshot, watch},
     task::JoinHandle,
+    time::timeout,
 };
 
 use crate::{
@@ -32,6 +34,8 @@ const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
 const BUFFER_SIZE: usize = 1024;
 const HANDSHAKE_REQUEST_ID: u8 = 0;
 const MAGIC_HEADER: u8 = 0x95;
+
+const MAX_SETTLE_WAIT_MS: u64 = 100;
 
 pub struct RobotArm {
     inner: Arc<Inner>,
@@ -76,7 +80,6 @@ struct MotionState {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
 pub enum RobotArmInstruction {
     Move(Motion),
     SetOffset(Point),
@@ -179,21 +182,35 @@ impl RobotArm {
 
         let error_task = error.wait_for(Option::is_some);
 
-        let moving_task = async {
-            for v in [false, true] {
-                state
-                    .wait_for(|s| s.as_ref().is_some_and(|s| s.motion.settled == v))
-                    .await?;
-            }
+        let mut moving_task = async || -> Result<()> {
+            timeout(
+                Duration::from_millis(MAX_SETTLE_WAIT_MS),
+                Self::wait_for_settled_value(&mut state, false),
+            )
+            .await??;
 
-            Result::<(), watch::error::RecvError>::Ok(())
+            Self::wait_for_settled_value(&mut state, true).await?;
+            Ok(())
         };
 
         // Race the error and negative moving edge, whichever comes first
         select! {
             Ok(code) = error_task => Err(RobotArmError::RemoteError(code.unwrap())),
-            _ = moving_task => Ok(()),
+            _ = moving_task() => Ok(()),
         }
+    }
+
+    // async fn wait_positive_settle_edge(receiver: &mut watch::Receiver<Op>)
+
+    async fn wait_for_settled_value(
+        receiver: &mut watch::Receiver<Option<State>>,
+        value: bool,
+    ) -> Result<(), watch::error::RecvError> {
+        receiver
+            .wait_for(|s| s.as_ref().is_some_and(|s| s.motion.settled == value))
+            .await?;
+
+        Ok(())
     }
 
     /* == Background tasks == */
@@ -206,6 +223,11 @@ impl RobotArm {
 
             match Response::decode(&buf[..])? {
                 Response::Status(state) => {
+                    if let Some(stream) = &inner.shared.lock().await.stream {
+                        let pose = Pose::from(&state.position);
+                        stream.add(&pose.to_array()).await;
+                    }
+
                     inner.state.send_replace(Some(state));
                 }
 
@@ -224,7 +246,8 @@ impl RobotArm {
                 }
 
                 Response::Motion(motion) => {
-                    tracing::debug!("Got motion state: {}", motion.settled);
+                    tracing::debug!("Settled: {}", motion.settled);
+
                     inner.state.send_modify(|maybe_state| {
                         if let Some(state) = maybe_state {
                             state.motion = motion;
@@ -252,12 +275,15 @@ impl HardwareAgent for RobotArm {
     }
 
     async fn start(&mut self) {
+        tracing::debug!("Requesting robot reporting");
+
         self.execute_command(RobotCommand::SetReporting(true))
             .await
             .ok();
     }
 
     async fn stop(&mut self) {
+        tracing::debug!("Stopping robot reporting");
         self.execute_command(RobotCommand::SetReporting(false))
             .await
             .ok();

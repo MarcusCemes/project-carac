@@ -1,19 +1,24 @@
 use std::{
     collections::HashMap,
-    net::{Ipv4Addr, UdpSocket},
+    net::{IpAddr, Ipv4Addr, UdpSocket},
 };
 
 use eyre::Result;
 use serde::Serialize;
 
-use crate::data::sink::StreamInfo;
+use crate::{config::PlotJugglerConfig, data::sink::StreamInfo};
 
 const DEFAULT_PORT: u16 = 9870;
 
 /* == PlotJugglerBroadcaster == */
 
+pub struct PlotJugglerBroadcasterBuilder {
+    ip: IpAddr,
+    port: u16,
+}
+
 pub struct PlotJugglerBroadcaster {
-    addr: (Ipv4Addr, u16),
+    addr: (IpAddr, u16),
     socket: UdpSocket,
 }
 
@@ -25,18 +30,37 @@ struct Message {
     fields: HashMap<String, f32>,
 }
 
-impl PlotJugglerBroadcaster {
-    pub fn create(ip: Option<&str>, port: Option<u16>) -> Result<Self> {
+impl PlotJugglerBroadcasterBuilder {
+    pub fn with_config(mut self, config: &PlotJugglerConfig) -> Self {
+        self.ip = config.ip;
+        self.port = config.port;
+
+        self
+    }
+
+    pub fn build(self) -> Result<PlotJugglerBroadcaster> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-
-        let ip = match ip {
-            Some(ip) => ip.parse()?,
-            None => Ipv4Addr::LOCALHOST,
-        };
-
-        let addr = (ip, port.unwrap_or(DEFAULT_PORT));
+        let addr = (self.ip, self.port);
 
         Ok(PlotJugglerBroadcaster { addr, socket })
+    }
+}
+
+impl Default for PlotJugglerBroadcasterBuilder {
+    fn default() -> Self {
+        Self {
+            ip: PlotJugglerBroadcaster::DEFAULT_IP,
+            port: PlotJugglerBroadcaster::DEFAULT_PORT,
+        }
+    }
+}
+
+impl PlotJugglerBroadcaster {
+    const DEFAULT_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    const DEFAULT_PORT: u16 = 9870;
+
+    pub fn builder() -> PlotJugglerBroadcasterBuilder {
+        PlotJugglerBroadcasterBuilder::default()
     }
 
     pub fn send(&self, ts: f32, channel_data: &[f32], streams: &StreamInfo) -> Result<()> {

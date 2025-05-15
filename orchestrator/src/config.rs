@@ -8,7 +8,7 @@ use eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::fs::read;
 
-use crate::misc::{serde::deserialize_null_to_default, ColourDot};
+use crate::misc::{ColourDot, serde::deserialize_null_to_default};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -66,6 +66,7 @@ pub struct WindShapeConfig {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SinkConfig {
     pub session_path: Option<PathBuf>,
     #[serde(deserialize_with = "deserialize_null_to_default")]

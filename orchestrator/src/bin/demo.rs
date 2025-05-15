@@ -1,8 +1,8 @@
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{net::IpAddr, sync::Arc};
 
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
-use tokio::{task::JoinSet, time::sleep};
+use tokio::task::JoinSet;
 
 use drone_lab::{
     data::sink::{DataSink, StreamInfo},
@@ -13,7 +13,7 @@ use drone_lab::{
         robot_arm::{Motion, MotionDiscriminants, RobotArm, SpeedProfile},
         wind_shape::WindShape,
     },
-    misc::plot_juggler::PlotJugglerBroadcaster,
+    misc::{plot_juggler::PlotJugglerBroadcaster, sleep},
 };
 
 #[derive(Parser)]
@@ -66,8 +66,9 @@ pub async fn counter() -> Result<()> {
 
     let (sink, _streams) = builder.build();
 
-    let broadcaster = PlotJugglerBroadcaster::create(None, None);
-    sink.set_broadcaster(broadcaster.ok()).await;
+    if let Ok(broadcaster) = PlotJugglerBroadcaster::builder().build() {
+        sink.set_broadcaster(broadcaster).await;
+    }
 
     // This will not get recorded
     null_handle.add(&[0., f32::NAN]).await;
@@ -78,7 +79,7 @@ pub async fn counter() -> Result<()> {
     // This will get recorded
     null_handle.add(&[1., f32::NAN]).await;
 
-    sleep(Duration::from_secs_f32(1.6)).await;
+    sleep(1.6).await;
 
     tracing::info!("Stopping recording...");
     let _run = sink.stop_recording().await;
@@ -96,7 +97,7 @@ pub async fn counter() -> Result<()> {
 /* == PlotJuggler == */
 
 pub async fn plot_juggler() -> Result<()> {
-    let plot = Arc::new(PlotJugglerBroadcaster::create(None, None)?);
+    let plot = Arc::new(PlotJugglerBroadcaster::builder().build()?);
 
     let mock_streams = Arc::new(["counter0", "counter1"].map(|name| StreamInfo {
         name: name.to_string(),
@@ -124,7 +125,7 @@ async fn plot_juggler_task(
 ) -> Result<()> {
     let stream_id_f32 = stream_id as f32 + 1.;
 
-    sleep(Duration::from_secs_f32(0.5 * stream_id_f32)).await;
+    sleep(0.5 * stream_id_f32).await;
 
     for time in 0..1000 {
         let t = 1e-2 * (time as f32) + stream_id_f32;
@@ -137,7 +138,7 @@ async fn plot_juggler_task(
 
         plot.send(t, &[v], &streams[stream_id])?;
 
-        sleep(Duration::from_micros(100)).await;
+        sleep(0.1).await;
     }
 
     Ok(())
@@ -268,28 +269,22 @@ async fn wind_shape(opts: WindShapeOpts) -> Result<()> {
     wind_shape.request_control().await;
 
     wind_shape.enable_power().await?;
-    sleep_s(1.).await;
+    sleep(1.).await;
 
     wind_shape.set_fan_speed(10).await?;
-    sleep_s(3.).await;
+    sleep(3.).await;
 
     wind_shape.set_fan_speed(15).await?;
-    sleep_s(1.).await;
+    sleep(1.).await;
 
     wind_shape.set_fan_speed(20).await?;
-    sleep_s(1.).await;
+    sleep(1.).await;
 
     wind_shape.set_fan_speed(5).await?;
-    sleep_s(1.).await;
+    sleep(1.).await;
 
     wind_shape.disable_power().await?;
     wind_shape.release_control().await;
 
     Ok(())
-}
-
-/* == Utils == */
-
-async fn sleep_s(seconds: f32) {
-    tokio::time::sleep(Duration::from_secs_f32(seconds)).await;
 }
