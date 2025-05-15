@@ -6,7 +6,7 @@ use tokio::task::JoinSet;
 
 use drone_lab::{
     data::sink::{DataSink, StreamInfo},
-    defs::Point,
+    defs::PoseEuler,
     hardware::{
         HardwareAgent,
         example_counter::ExampleCounter,
@@ -35,6 +35,7 @@ enum Command {
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> Result<()> {
     drone_lab::init()?;
+    drone_lab::banner();
 
     let opts = Opts::parse();
 
@@ -166,16 +167,14 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
 
     let mut r = robot_arm.controller();
 
-    let mut point = Point {
+    let mut point = PoseEuler {
         x: 500.,
         y: 100.,
         z: 400.,
-        rx: 0.,
-        ry: 0.,
-        rz: 0.,
+        ..Default::default()
     };
 
-    let mut offset = Point {
+    let mut offset = PoseEuler {
         x: 660.,
         z: 20.,
         ..Default::default()

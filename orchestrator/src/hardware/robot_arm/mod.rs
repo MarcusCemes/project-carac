@@ -29,7 +29,6 @@ use crate::{
 };
 
 const NAME: &str = "robot_arm";
-const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
 
 const BUFFER_SIZE: usize = 1024;
 const HANDSHAKE_REQUEST_ID: u8 = 0;
@@ -68,9 +67,9 @@ enum Response {
 #[derive(Debug, Decode)]
 struct State {
     motion: MotionState,
-    position: Point,
-    pose: Joint,
-    error: Joint,
+    position: PoseEuler,
+    pose: RobotJoints,
+    error: RobotJoints,
 }
 
 #[derive(Debug, Decode)]
@@ -82,7 +81,7 @@ struct MotionState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum RobotArmInstruction {
     Move(Motion),
-    SetOffset(Point),
+    SetOffset(PoseEuler),
     SetProfile(SpeedProfile),
     WaitSettled,
 }
@@ -225,7 +224,7 @@ impl RobotArm {
                 Response::Status(state) => {
                     if let Some(stream) = &inner.shared.lock().await.stream {
                         let pose = Pose::from(&state.position);
-                        stream.add(&pose.to_array()).await;
+                        stream.add(&pose.array()).await;
                     }
 
                     inner.state.send_replace(Some(state));
@@ -291,7 +290,7 @@ impl HardwareAgent for RobotArm {
 
     async fn register(&mut self, sink: &mut DataSinkBuilder) {
         let name = NAME.to_owned();
-        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let channels = Pose::CHANNELS.map(str::to_owned).to_vec();
         let stream = sink.register_stream(name, channels).await;
 
         self.inner.shared.lock().await.stream = Some(stream);
@@ -320,9 +319,11 @@ impl Inner {
         socket: UdpSocket,
         state: watch::Sender<Option<State>>,
     ) -> Self {
+        let shared = Mutex::new(Shared::default());
+
         Inner {
             error,
-            shared: Mutex::new(Shared::default()),
+            shared,
             socket,
             state,
         }
@@ -346,15 +347,15 @@ pub enum RobotCommand {
     ReturnHome(MotionDiscriminants),
     SetReportInterval(f32),
     SetSpeedProfile(SpeedProfile),
-    SetToolOffset(Point),
+    SetToolOffset(PoseEuler),
     SetReporting(bool),
 }
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, EnumDiscriminants)]
 pub enum Motion {
-    Direct(Point),
-    Joint(Joint),
-    Linear(Point),
+    Direct(PoseEuler),
+    Joint(RobotJoints),
+    Linear(PoseEuler),
 }
 
 #[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
@@ -429,7 +430,7 @@ impl RobotController<'_> {
         self.0.execute_command(RobotCommand::Move(motion)).await
     }
 
-    pub async fn set_offset(&mut self, offset: Point) -> Result<()> {
+    pub async fn set_offset(&mut self, offset: PoseEuler) -> Result<()> {
         self.0
             .execute_command(RobotCommand::SetToolOffset(offset))
             .await

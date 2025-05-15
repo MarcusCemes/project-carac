@@ -49,7 +49,12 @@ impl Session {
     }
 
     pub async fn new_experiment(&mut self, name: String) -> Result<()> {
-        let mut file = File::create(self.root_path.join(Self::TEMP_EXPERIMENT_NAME)).await?;
+        let path = self
+            .root_path
+            .join(Self::EXPERIMENTS_DIR)
+            .join(Self::TEMP_EXPERIMENT_NAME);
+
+        let mut file = File::create(path).await?;
         let mut buf = ChunkedBytes::new().writer();
 
         let header = ExperimentHeader::new(name, self.metadata.channels());
@@ -77,8 +82,6 @@ impl Session {
     }
 
     pub async fn save_experiment(&mut self) -> Result<()> {
-        let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
-
         let Some((file, name)) = self.open_experiment.take() else {
             bail!("No experiment file open");
         };
@@ -88,7 +91,11 @@ impl Session {
         let id = self.next_experiment_number().await?;
         let name = Self::experiment_name(id, &name);
 
-        fs::rename(dir.join(Self::TEMP_EXPERIMENT_NAME), dir.join(&name)).await?;
+        let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
+        let from = dir.join(Self::TEMP_EXPERIMENT_NAME);
+        let to = dir.join(&name);
+
+        fs::rename(from, to).await?;
 
         Ok(())
     }
@@ -98,27 +105,27 @@ impl Session {
     }
 
     fn experiment_name(id: u32, name: &str) -> String {
-        format!("exp_{id}_{name}")
+        format!("{id:04}_{name}")
     }
 
     async fn next_experiment_number(&self) -> Result<u32> {
         let mut files = fs::read_dir(self.root_path.join(Self::EXPERIMENTS_DIR)).await?;
-        let mut max_id = 0;
+        let mut max_id = None;
 
         while let Some(entry) = files.next_entry().await? {
             if let Some(name) = entry.file_name().to_str() {
                 if let Some(id) = Self::extract_id(name) {
-                    max_id = max_id.max(id);
+                    let value = max_id.get_or_insert(id);
+                    *value = (*value).max(id);
                 }
             }
         }
 
-        Ok(max_id)
+        Ok(max_id.map(|id| id + 1).unwrap_or(0))
     }
 
     fn extract_id(name: &str) -> Option<u32> {
-        let rest = name.strip_prefix("exp_")?;
-        let (id, _) = rest.split_once('_')?;
+        let (id, _) = name.split_once('_')?;
         id.parse().ok()
     }
 }

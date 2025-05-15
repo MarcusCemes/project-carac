@@ -27,5 +27,16 @@ class Orchestrator:
             json={"instructions": [i.toJSON() for i in instructions]},
         )
 
+    def new_experiment(self, name: str):
+        return self._client.post(
+            "/new_experiment",
+            json={"name": name},
+        )
+
+    def save_experiment(self):
+        return self._client.post(
+            "/save_experiment",
+        )
+
     def status(self) -> str:
         return self._client.get("/status").text

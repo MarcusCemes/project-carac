@@ -15,7 +15,7 @@ use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 use crate::{
     config::LoadCellConfig,
     data::sink::{DataSinkBuilder, StreamWriter},
-    defs::Point,
+    defs::PoseEuler,
     misc::network_config,
 };
 
@@ -96,7 +96,6 @@ struct NetFtApi2 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum LoadCellInstruction {
     SetBias,
-    SetStreaming(bool),
 }
 
 impl LoadCell {
@@ -125,8 +124,6 @@ impl LoadCell {
     pub async fn execute(&self, instruction: LoadCellInstruction) -> Result<()> {
         match instruction {
             LoadCellInstruction::SetBias => self.set_bias().await,
-            LoadCellInstruction::SetStreaming(true) => self.start_streaming().await,
-            LoadCellInstruction::SetStreaming(false) => self.stop_streaming().await,
         }
         .wrap_err("Load cell error")
     }
@@ -143,7 +140,7 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    pub async fn set_tool_offset(&self, offset: Point) {
+    pub async fn set_tool_offset(&self, offset: PoseEuler) {
         let transform = LoadTransform::new(offset);
         self.inner.shared.lock().await.transform = Some(transform);
     }
@@ -219,6 +216,14 @@ impl HardwareAgent for LoadCell {
         let stream = sink.register_stream(name, channels).await;
 
         self.inner.shared.lock().await.stream = Some(stream);
+    }
+
+    async fn start(&mut self) {
+        let _ = self.start_streaming().await;
+    }
+
+    async fn stop(&mut self) {
+        let _ = self.stop_streaming().await;
     }
 }
 
@@ -328,7 +333,7 @@ struct LoadTransform {
 }
 
 impl LoadTransform {
-    pub fn new(offset: Point) -> Self {
+    pub fn new(offset: PoseEuler) -> Self {
         let translation = Vector3::new(offset.x, offset.y, offset.z);
         let rotation = Rotation3::from_euler_angles(offset.rx, offset.ry, offset.rz);
 

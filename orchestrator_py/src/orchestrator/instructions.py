@@ -74,13 +74,8 @@ class SetBias(Serializable):
 
 
 @dataclass
-class SetStreaming(Serializable):
-    enabled: bool
-
-
-@dataclass
 class LoadCell(Serializable):
-    type: SetBias | SetStreaming
+    type: SetBias
 
 
 # == Robot Arm == #

@@ -5,9 +5,14 @@ use eyre::Result;
 
 use crate::data::{experiment::Experiment, session::SessionMetadata};
 
+const MAX_SAMPLES: usize = 10;
+
 #[derive(Parser)]
 pub struct ViewOpts {
     path: PathBuf,
+
+    #[clap(short, long, default_value_t = false)]
+    all: bool,
 }
 
 pub async fn view(opts: ViewOpts) -> Result<()> {
@@ -43,14 +48,23 @@ pub async fn view(opts: ViewOpts) -> Result<()> {
             let n_samples = stream.timestamps.len();
             let size = n_samples * n_channels as usize * mem::size_of::<f32>();
 
-            println!("\n  {name} ({n_samples} - {size} B)");
+            println!("\n  {name} ({n_samples} samples, {size} B)");
 
-            for sample in stream.iter_samples() {
+            let n = match opts.all {
+                true => usize::MAX,
+                false => MAX_SAMPLES,
+            };
+
+            for sample in stream.iter_samples().take(n) {
                 println!(
                     "    - {:.03}: {:+.03?}",
-                    sample.time_s(),
+                    f32::from(sample.time),
                     sample.channel_data
                 );
+            }
+
+            if !opts.all && n_samples > MAX_SAMPLES {
+                println!("    - ({} more)", n_samples - MAX_SAMPLES);
             }
         }
     }

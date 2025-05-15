@@ -10,7 +10,6 @@ const DEFAULT_DIVISIONS: u32 = 100;
 
 #[derive(Clone, Debug, Parser)]
 pub struct ConvertOpts {
-    #[clap(short, long)]
     pub path: PathBuf,
 
     #[clap(short, long, default_value_t = 0)]

@@ -1,30 +1,24 @@
 use bincode::{Decode, Encode};
-use quaternion::{Quaternion, euler_angles};
+use nalgebra::{UnitQuaternion, Vector3};
 use serde::{Deserialize, Serialize};
 
-pub type Vec3<T> = [T; 3];
-
-#[derive(Copy, Clone, Debug, Default, PartialEq, Encode, Decode)]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Pose {
-    pub position: Vec3<f32>,
-    pub orientation: Quaternion<f32>,
+    pub position: Vector3<f32>,
+    pub orientation: UnitQuaternion<f32>,
 }
 
 impl Pose {
-    pub fn to_array(self) -> [f32; 7] {
-        let mut array = [0.; 7];
-        array[0..3].copy_from_slice(&self.position);
-        array[3] = self.orientation.0;
-        array[4..7].copy_from_slice(&self.orientation.1);
-        array
+    pub const CHANNELS: [&str; 7] = ["x", "y", "z", "i", "j", "k", "w"];
+
+    pub fn array(self) -> [f32; 7] {
+        let (p, o) = (self.position, self.orientation);
+        [p.x, p.y, p.z, o.i, o.j, o.k, o.w]
     }
 }
 
-// The required size for a Point or Joint
-pub const POINT_JOINT_SIZE: usize = 6 * std::mem::size_of::<f32>();
-
 #[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
-pub struct Point {
+pub struct PoseEuler {
     pub x: f32,
     pub y: f32,
     pub z: f32,
@@ -33,28 +27,17 @@ pub struct Point {
     pub rz: f32,
 }
 
-impl Point {
-    pub const ZERO: Self = Self {
-        x: 0.0,
-        y: 0.0,
-        z: 0.0,
-        rx: 0.0,
-        ry: 0.0,
-        rz: 0.0,
-    };
-}
-
-impl From<&Point> for Pose {
-    fn from(point: &Point) -> Self {
+impl From<&PoseEuler> for Pose {
+    fn from(point: &PoseEuler) -> Self {
         Pose {
-            position: [point.x, point.y, point.z],
-            orientation: euler_angles(point.rx, point.ry, point.rz),
+            position: Vector3::new(point.x, point.y, point.z),
+            orientation: UnitQuaternion::from_euler_angles(point.rx, point.ry, point.rz),
         }
     }
 }
 
 #[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
-pub struct Joint([f32; 6]);
+pub struct RobotJoints([f32; 6]);
 
 #[cfg(test)]
 mod tests {
@@ -62,9 +45,12 @@ mod tests {
 
     use super::*;
 
+    const POSE_SIZE: usize = 6 * std::mem::size_of::<f32>();
+
+    /// Verify sizes for bincode encode/decode
     #[test]
-    fn motion_size() {
-        assert_eq!(mem::size_of::<Point>(), POINT_JOINT_SIZE);
-        assert_eq!(mem::size_of::<Joint>(), POINT_JOINT_SIZE);
+    fn test_struct_sizes() {
+        assert_eq!(mem::size_of::<PoseEuler>(), POSE_SIZE);
+        assert_eq!(mem::size_of::<RobotJoints>(), POSE_SIZE);
     }
 }

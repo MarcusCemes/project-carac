@@ -43,12 +43,12 @@ pub fn run() -> Result<()> {
     execute_command(Cli::parse().command)
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 4)]
 pub async fn execute_command(command: Command) -> Result<()> {
     match command {
         Command::Convert(opts) => convert::segment(opts).await,
         Command::Run { config } => run::launch(&config).await,
-        Command::Server { config, port } => server::start(&config, port).await,
+        Command::Server { config, port } => server::launch(&config, port).await,
         Command::View(opts) => view::view(opts).await,
     }
 }

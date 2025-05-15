@@ -1,11 +1,9 @@
-use std::time::Duration;
-
 use eyre::Result;
 
 use crate::{
     config::Config,
     data::orchestrator::Orchestrator,
-    defs::Point,
+    defs::PoseEuler,
     hardware::{
         HardwareContext,
         robot_arm::{Motion, MotionDiscriminants, SpeedProfile},
@@ -13,15 +11,10 @@ use crate::{
     misc::sleep,
 };
 
-const TIMEOUT: Duration = Duration::from_secs(3);
-
 pub async fn launch(config_path: &str) -> Result<()> {
     let config = Config::load(config_path).await?;
 
-    let context = HardwareContext::builder()
-        .with_timeout(TIMEOUT)
-        .build(&config.hardware)
-        .await?;
+    let context = HardwareContext::builder().build(&config.hardware).await?;
 
     let mut orchestrator = Orchestrator::create(config, context).await?;
 
@@ -56,13 +49,13 @@ async fn experiment_code(orchestrator: &mut Orchestrator) -> Result<()> {
         translation_limit: 10000.,
     };
 
-    let offset = Point {
+    let offset = PoseEuler {
         x: 660.,
         z: 0.,
         ..Default::default()
     };
 
-    let mut pos = Point {
+    let mut pos = PoseEuler {
         x: 600.,
         z: 600.,
         ..Default::default()

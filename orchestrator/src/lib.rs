@@ -11,7 +11,6 @@ pub mod data;
 pub mod defs;
 pub mod hardware;
 pub mod misc;
-pub mod server;
 
 const CRATE: &str = env!("CARGO_CRATE_NAME");
 const NAME: &str = env!("CARGO_PKG_NAME");
@@ -26,7 +25,7 @@ pub fn init() -> Result<()> {
     color_eyre::install()?;
 
     let env_filter = EnvFilter::builder()
-        .with_default_directive("drone-lab=debug".parse()?)
+        .with_default_directive("drone_lab=debug".parse()?)
         .from_env_lossy();
 
     tracing_subscriber::fmt()
@@ -34,8 +33,10 @@ pub fn init() -> Result<()> {
         .with_writer(io::stderr)
         .init();
 
+    Ok(())
+}
+
+pub fn banner() {
     eprintln!("\n{NAME} {VERSION} ({TARGET_ARCH}-{TARGET_VENDOR}-{TARGET_OS}-{TARGET_ENV})");
     eprintln!("Designed by Marcus Cemes <marcus.cemes@epfl.ch>\n");
-
-    Ok(())
 }

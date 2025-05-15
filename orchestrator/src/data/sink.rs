@@ -9,7 +9,7 @@ use tokio::{
 };
 
 use crate::{
-    data::experiment::{RecordedStream, Run},
+    data::experiment::{RecordedStream, Run, SampleTime},
     hardware::HardwareContext,
     misc::plot_juggler::PlotJugglerBroadcaster,
 };
@@ -68,7 +68,10 @@ impl Broadcaster {
     }
 }
 
-struct Buffer(ChunkedBytes, usize);
+struct Buffer {
+    buf: ChunkedBytes,
+    n_channels: usize,
+}
 
 /* === Implementations === */
 
@@ -104,7 +107,12 @@ impl DataSinkBuilder {
         let index = buffer_lock.len();
         let stream = StreamInfo { name, channels };
 
-        buffer_lock.push(Buffer(ChunkedBytes::new(), stream.channels.len()));
+        let buffer = Buffer {
+            buf: ChunkedBytes::new(),
+            n_channels: stream.channels.len(),
+        };
+
+        buffer_lock.push(buffer);
         self.streams.push(stream.clone());
 
         StreamWriter {
@@ -205,31 +213,31 @@ impl Shared {
 
 impl Buffer {
     pub fn clear(&mut self) {
-        self.0.advance(self.0.remaining());
+        self.buf.advance(self.buf.remaining());
     }
 
     pub fn append(&mut self, time_us: u32, channels: &[f32]) {
-        self.0.put_u32_ne(time_us);
+        self.buf.put_u32_ne(time_us);
 
         for datum in channels {
-            self.0.put_f32_ne(*datum);
+            self.buf.put_f32_ne(*datum);
         }
     }
 
     pub fn finish(&mut self) -> RecordedStream {
-        let n_samples = self.0.remaining() / (1 + self.1);
+        let n_samples = self.buf.remaining() / (1 + self.n_channels);
 
         let mut timestamps = Vec::with_capacity(n_samples);
-        let mut channels = Vec::with_capacity(n_samples * self.1);
+        let mut channels = Vec::with_capacity(n_samples * self.n_channels);
 
-        while let Ok(time) = self.0.try_get_u32_ne() {
-            timestamps.push(time);
+        while let Ok(time) = self.buf.try_get_u32_ne() {
+            timestamps.push(SampleTime(time));
 
-            for _ in 0..self.1 {
-                channels.push(self.0.get_f32_ne());
+            for _ in 0..self.n_channels {
+                channels.push(self.buf.get_f32_ne());
             }
         }
 
-        RecordedStream::new(timestamps, channels)
+        RecordedStream::new(timestamps, channels, self.n_channels)
     }
 }

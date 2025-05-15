@@ -56,14 +56,15 @@ impl HardwareContext {
 
 /* == HardwareContextBuilder == */
 
-#[derive(Default)]
 pub struct HardwareContextBuilder {
     timeout: Option<Duration>,
 }
 
 impl HardwareContextBuilder {
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
+
+    pub fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.timeout = timeout;
         self
     }
 
@@ -106,6 +107,14 @@ impl HardwareContextBuilder {
             robot_arm,
             wind_shape,
         })
+    }
+}
+
+impl Default for HardwareContextBuilder {
+    fn default() -> Self {
+        Self {
+            timeout: Some(HardwareContextBuilder::DEFAULT_TIMEOUT),
+        }
     }
 }
 
