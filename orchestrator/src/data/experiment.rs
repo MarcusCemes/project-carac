@@ -58,6 +58,8 @@ pub struct RunSample<'a> {
     pub time: SampleTime,
 }
 
+pub struct ChannelData(pub Box<[f32]>);
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SampleTime(pub u32);
 
@@ -144,6 +146,24 @@ impl Run {
         Self { recorded_streams }
     }
 
+    pub fn get_stream(&self, name: &str, streams: &[StreamInfo]) -> Option<&RecordedStream> {
+        streams
+            .iter()
+            .zip(self.recorded_streams.iter())
+            .find_map(|(info, stream)| (info.name == name).then_some(stream))
+    }
+
+    pub fn get_stream_mut(
+        &mut self,
+        name: &str,
+        streams: &[StreamInfo],
+    ) -> Option<&mut RecordedStream> {
+        streams
+            .iter()
+            .zip(self.recorded_streams.iter_mut())
+            .find_map(|(info, stream)| (info.name == name).then_some(stream))
+    }
+
     pub fn duration(&self) -> Option<SampleTime> {
         self.recorded_streams
             .iter()
@@ -222,6 +242,36 @@ impl RecordedStream {
             timestamps,
             n_channels,
         }
+    }
+
+    pub fn columns(&self) -> Vec<Box<[f32]>> {
+        let n_samples = self.timestamps.len();
+        let n_channels = self.n_channels;
+
+        assert_eq!(self.channel_data.len(), n_samples * n_channels);
+
+        let mut columns = (0..n_channels)
+            .map(|_| {
+                let buffer = Box::new_uninit_slice(n_samples);
+
+                // SAFETY: the buffer is completely filled below
+                unsafe { buffer.assume_init() }
+            })
+            .collect::<Vec<_>>();
+
+        for i in 0..n_samples {
+            for j in 0..n_channels {
+                // SAFETY: the length of channel_data is asserted above
+                unsafe {
+                    let source = self.channel_data.get_unchecked(i * n_channels + j);
+                    let destination = columns.get_unchecked_mut(j).get_unchecked_mut(i);
+
+                    *destination = *source;
+                }
+            }
+        }
+
+        columns
     }
 
     pub fn iter_samples(&self) -> RunSampleIterator<'_> {

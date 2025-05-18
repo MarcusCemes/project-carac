@@ -53,6 +53,7 @@ pub fn create_router(orchestrator: Orchestrator) -> (Router, Arc<AppState>) {
 
     let router = Router::new()
         .route("/execute", post(execute))
+        .route("/record", post(record))
         .route("/new_experiment", post(new_experiment))
         .route("/save_experiment", post(save_experiment))
         .route("/status", get(status))
@@ -76,6 +77,19 @@ async fn execute(
 
     orchestrator
         .execute(payload.instructions)
+        .await
+        .map(|_| ())
+        .into()
+}
+
+async fn record(
+    extract::State(state): extract::State<Arc<AppState>>,
+    extract::Json(payload): extract::Json<ExecutePayload>,
+) -> StandardResponse {
+    let mut orchestrator = state.orchestrator.lock().await;
+
+    orchestrator
+        .record(payload.instructions)
         .await
         .map(|_| ())
         .into()

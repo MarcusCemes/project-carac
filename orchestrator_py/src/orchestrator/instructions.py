@@ -87,6 +87,11 @@ class Move(Serializable):
 
 
 @dataclass
+class SetConfig(Serializable):
+    config: list[int]
+
+
+@dataclass
 class SetOffset(Serializable):
     point: Point
 
@@ -103,7 +108,7 @@ class WaitSettled(Serializable):
 
 @dataclass
 class RobotArm(Serializable):
-    type: Move | SetOffset | SetProfile | WaitSettled
+    type: Move | SetConfig | SetOffset | SetProfile | WaitSettled
 
 
 # == Wind Shape == #

@@ -4,6 +4,7 @@ use bincode::config::{Config, standard};
 use color_eyre::owo_colors::OwoColorize;
 
 pub mod buf;
+pub mod data;
 pub mod plot_juggler;
 pub mod serde;
 

@@ -8,7 +8,9 @@ use burn::{
     train::{RegressionOutput, TrainOutput, TrainStep, ValidStep},
 };
 
-const N_OUTPUTS: usize = 6;
+use crate::hardware::load_cell::LoadCell;
+
+const N_OUTPUTS: usize = LoadCell::CHANNELS.len();
 
 #[derive(Clone, Debug)]
 pub struct DataBatch<B: Backend> {

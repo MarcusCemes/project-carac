@@ -62,7 +62,7 @@ async fn experiment_code(orchestrator: &mut Orchestrator) -> Result<()> {
     };
 
     if let Some(robot) = &orchestrator.context().robot_arm {
-        let mut c = robot.controller();
+        let c = robot.controller();
         c.go_home(MotionDiscriminants::Linear).await?;
         c.wait_settled().await?;
     }
@@ -77,7 +77,7 @@ async fn experiment_code(orchestrator: &mut Orchestrator) -> Result<()> {
     }
 
     if let Some(robot) = &orchestrator.context().robot_arm {
-        let mut c = robot.controller();
+        let c = robot.controller();
 
         c.set_profile(profile).await?;
         c.set_offset(offset).await?;
@@ -90,7 +90,7 @@ async fn experiment_code(orchestrator: &mut Orchestrator) -> Result<()> {
     orchestrator.new_run().await;
 
     if let Some(robot) = &orchestrator.context().robot_arm {
-        let mut c = robot.controller();
+        let c = robot.controller();
 
         pos.rx = -90.;
         profile.rotation_limit = 180.;
@@ -104,7 +104,7 @@ async fn experiment_code(orchestrator: &mut Orchestrator) -> Result<()> {
     orchestrator.new_run().await;
 
     if let Some(robot) = &orchestrator.context().robot_arm {
-        let mut c = robot.controller();
+        let c = robot.controller();
 
         pos.rx = 90.;
 
@@ -124,7 +124,7 @@ async fn experiment_code(orchestrator: &mut Orchestrator) -> Result<()> {
     }
 
     if let Some(robot) = &orchestrator.context().robot_arm {
-        let mut c = robot.controller();
+        let c = robot.controller();
 
         profile.rotation_limit = 45.;
         c.set_profile(profile).await?;

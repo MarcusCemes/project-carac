@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::{Buf, BufMut};
 use eyre::{Report, Result, bail, eyre};
+use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumDiscriminants};
 use thiserror::Error;
@@ -81,6 +82,7 @@ struct MotionState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum RobotArmInstruction {
     Move(Motion),
+    SetConfig([u8; 3]),
     SetOffset(PoseEuler),
     SetProfile(SpeedProfile),
     WaitSettled,
@@ -93,6 +95,8 @@ pub enum RobotArmError {
 }
 
 impl RobotArm {
+    pub const BASE_POSITION: Vector3<f32> = Vector3::new(50., 50., 300.);
+
     pub async fn connect_from_config(config: &RobotArmConfig) -> Result<Self> {
         Self::connect(config.ip, config.port).await
     }
@@ -115,6 +119,7 @@ impl RobotArm {
     pub async fn execute(&mut self, instruction: RobotArmInstruction) -> Result<()> {
         let command = match instruction {
             RobotArmInstruction::Move(motion) => RobotCommand::Move(motion),
+            RobotArmInstruction::SetConfig(config) => RobotCommand::SetConfig(config),
             RobotArmInstruction::SetOffset(offset) => RobotCommand::SetToolOffset(offset),
             RobotArmInstruction::SetProfile(profile) => RobotCommand::SetSpeedProfile(profile),
             RobotArmInstruction::WaitSettled => return Ok(self.try_wait_settled().await?),
@@ -189,6 +194,8 @@ impl RobotArm {
             .await??;
 
             Self::wait_for_settled_value(&mut state, true).await?;
+
+            tracing::debug!("Motion settled");
             Ok(())
         };
 
@@ -245,8 +252,6 @@ impl RobotArm {
                 }
 
                 Response::Motion(motion) => {
-                    tracing::debug!("Settled: {}", motion.settled);
-
                     inner.state.send_modify(|maybe_state| {
                         if let Some(state) = maybe_state {
                             state.motion = motion;
@@ -277,6 +282,10 @@ impl HardwareAgent for RobotArm {
         tracing::debug!("Requesting robot reporting");
 
         self.execute_command(RobotCommand::SetReporting(true))
+            .await
+            .ok();
+
+        self.execute_command(RobotCommand::SetSpeedProfile(SpeedProfile::default()))
             .await
             .ok();
     }
@@ -345,6 +354,7 @@ pub enum RobotCommand {
     Hello,
     Move(Motion),
     ReturnHome(MotionDiscriminants),
+    SetConfig([u8; 3]),
     SetReportInterval(f32),
     SetSpeedProfile(SpeedProfile),
     SetToolOffset(PoseEuler),
@@ -417,6 +427,11 @@ impl RobotCommand {
                 b.put_u8(0x09);
                 b.put_u8(*enabled as u8);
             }
+
+            RobotCommand::SetConfig(config) => {
+                b.put_u8(0x0A);
+                b.put_slice(config);
+            }
         };
     }
 }
@@ -426,29 +441,35 @@ impl RobotCommand {
 pub struct RobotController<'a>(&'a RobotArm);
 
 impl RobotController<'_> {
-    pub async fn move_to(&mut self, motion: Motion) -> Result<()> {
+    pub async fn move_to(&self, motion: Motion) -> Result<()> {
         self.0.execute_command(RobotCommand::Move(motion)).await
     }
 
-    pub async fn set_offset(&mut self, offset: PoseEuler) -> Result<()> {
+    pub async fn set_config(&self, config: [u8; 3]) -> Result<()> {
+        self.0
+            .execute_command(RobotCommand::SetConfig(config))
+            .await
+    }
+
+    pub async fn set_offset(&self, offset: PoseEuler) -> Result<()> {
         self.0
             .execute_command(RobotCommand::SetToolOffset(offset))
             .await
     }
 
-    pub async fn set_profile(&mut self, profile: SpeedProfile) -> Result<()> {
+    pub async fn set_profile(&self, profile: SpeedProfile) -> Result<()> {
         self.0
             .execute_command(RobotCommand::SetSpeedProfile(profile))
             .await
     }
 
-    pub async fn go_home(&mut self, motion_type: MotionDiscriminants) -> Result<()> {
+    pub async fn go_home(&self, motion_type: MotionDiscriminants) -> Result<()> {
         self.0
             .execute_command(RobotCommand::ReturnHome(motion_type))
             .await
     }
 
-    pub async fn halt(&mut self, return_home: bool) -> Result<()> {
+    pub async fn halt(&self, return_home: bool) -> Result<()> {
         self.0
             .execute_command(RobotCommand::Halt { return_home })
             .await
@@ -516,6 +537,20 @@ impl Response {
         };
 
         Ok(response)
+    }
+}
+
+/* == SpeedProfile == */
+
+impl Default for SpeedProfile {
+    fn default() -> Self {
+        Self {
+            translation_limit: 10000.,
+            rotation_limit: 10000.,
+            acceleration_scale: 100,
+            velocity_scale: 100,
+            deceleration_scale: 10,
+        }
     }
 }
 

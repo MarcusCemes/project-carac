@@ -13,7 +13,7 @@ class Orchestrator:
         self._port = port
 
     def __enter__(self):
-        self._client = Client(base_url=f"http://{self._ip}:{self._port}")
+        self._client = Client(base_url=f"http://{self._ip}:{self._port}", timeout=None)
         return self
 
     def __exit__(self, *_):
@@ -25,18 +25,22 @@ class Orchestrator:
         return self._client.post(
             "/execute",
             json={"instructions": [i.toJSON() for i in instructions]},
-        )
+        ).raise_for_status()
+
+    def record(self, instructions: list[Instruction]):
+        return self._client.post(
+            "/record",
+            json={"instructions": [i.toJSON() for i in instructions]},
+        ).raise_for_status()
 
     def new_experiment(self, name: str):
         return self._client.post(
             "/new_experiment",
             json={"name": name},
-        )
+        ).raise_for_status()
 
     def save_experiment(self):
-        return self._client.post(
-            "/save_experiment",
-        )
+        return self._client.post("/save_experiment").raise_for_status()
 
     def status(self) -> str:
-        return self._client.get("/status").text
+        return self._client.get("/status", timeout=3).text

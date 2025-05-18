@@ -106,6 +106,10 @@
       logMsg("[SOCKET] Set reporting request")
       reportEnabled = buffer[3] != 0
 
+    elseIf buffer[2] == 10 and payloadSize == 3
+      logMsg("[SOCKET] Configuration request")
+      call decodeConfig(target, buffer[3])
+
     else
       logMsg("[SOCKET] Unknown message: " + toString("", buffer[2]) + "with payload size " + toString("", payloadSize), 3)
       ack = false

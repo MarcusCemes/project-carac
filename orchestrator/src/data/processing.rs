@@ -1,7 +1,11 @@
 use std::iter::{self, Peekable};
 
-use eyre::Result;
+use butterworth::{Cutoff, Filter};
+use eyre::{ContextCompat, Result};
+use nalgebra::{Rotation3, Vector3};
 use polars::prelude::*;
+
+use crate::defs::Load;
 
 use super::{
     experiment::{RecordedStream, Run, RunSample, RunSampleIterator},
@@ -233,5 +237,85 @@ impl Iterator for TimeIterator {
         let time = self.duration * (self.index as f32 / self.total as f32);
         self.index += 1;
         Some(time)
+    }
+}
+
+/* == StreamFilter == */
+
+pub struct StreamFilter {
+    cutoff_frequency: f64,
+}
+
+impl StreamFilter {
+    pub const ORDER: usize = 1;
+
+    pub fn new(cutoff_frequency: f64) -> Self {
+        Self { cutoff_frequency }
+    }
+
+    pub fn apply(&self, stream: &mut RecordedStream) -> Result<()> {
+        let n_samples = stream.timestamps.len();
+
+        let duration = stream
+            .timestamps
+            .last()
+            .map(|&t| f32::from(t))
+            .wrap_err("Insufficient data in stream")?;
+
+        let sample_rate = duration as f64 / n_samples as f64;
+
+        let filter = Filter::new(
+            Self::ORDER,
+            sample_rate,
+            Cutoff::LowPass(self.cutoff_frequency),
+        )?;
+
+        let mut buffer = Vec::with_capacity(stream.n_channels * n_samples);
+
+        for channel in 0..stream.n_channels {
+            buffer.clear();
+
+            buffer.extend(Self::iter_channel(stream, channel).map(|t| *t as f64));
+
+            let new_data = filter.bidirectional(&buffer)?;
+
+            for (old, new) in Self::iter_channel(stream, channel).zip(new_data) {
+                *old = new as f32;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn iter_channel(stream: &mut RecordedStream, offset: usize) -> impl Iterator<Item = &mut f32> {
+        stream
+            .channel_data
+            .iter_mut()
+            .skip(offset)
+            .step_by(stream.n_channels)
+    }
+}
+
+/* == LoadTransform == */
+
+struct LoadTransform {
+    rotation: Rotation3<f32>,
+    translation: Vector3<f32>,
+}
+
+impl LoadTransform {
+    pub fn new(translation: Vector3<f32>, rotation: Vector3<f32>) -> Self {
+        let rotation = Rotation3::from_euler_angles(rotation.x, rotation.y, rotation.z);
+
+        Self {
+            rotation,
+            translation,
+        }
+    }
+
+    pub fn apply(&self, load: &Load) -> Load {
+        let force = self.rotation * load.force;
+        let torque = self.rotation * load.moment + self.translation.cross(&force);
+        Load { force, moment: torque }
     }
 }

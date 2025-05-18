@@ -9,8 +9,9 @@
 
   while true
     wait(isSettled() != settled)
-    call sendMoving()
     settled = !settled
+
+    call sendMoving()
   endWhile
 end
 ]]></Code>

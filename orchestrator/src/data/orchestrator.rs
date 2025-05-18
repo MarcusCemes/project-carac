@@ -61,15 +61,20 @@ impl Orchestrator {
         &mut self.context
     }
 
-    pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
-        self.sink.start_recording().await;
-
+    pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<()> {
         for instruction in instructions {
             self.execute_instruction(instruction).await?;
         }
 
-        let run = self.sink.stop_recording().await;
+        Ok(())
+    }
 
+    pub async fn record(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
+        self.sink.start_recording().await;
+
+        self.execute(instructions).await?;
+
+        let run = self.sink.stop_recording().await;
         self.session.append_run(&run).await?;
 
         Ok(run)

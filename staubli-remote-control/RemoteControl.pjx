@@ -2,6 +2,7 @@
 <Project xmlns="http://www.staubli.com/robotics/VAL3/Project/3">
   <Parameters version="s8.10.3Cs9_BS2093" stackSize="5000" millimeterUnit="true" />
   <Programs>
+    <Program file="decodeConfig.pgx" />
     <Program file="decodeDesc.pgx" />
     <Program file="decodeLocation.pgx" />
     <Program file="decodePose.pgx" />

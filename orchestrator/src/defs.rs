@@ -27,6 +27,23 @@ pub struct PoseEuler {
     pub rz: f32,
 }
 
+impl PoseEuler {
+    pub const fn new(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32) -> Self {
+        Self {
+            x,
+            y,
+            z,
+            rx,
+            ry,
+            rz,
+        }
+    }
+
+    pub fn array(self) -> [f32; 6] {
+        [self.x, self.y, self.z, self.rx, self.ry, self.rz]
+    }
+}
+
 impl From<&PoseEuler> for Pose {
     fn from(point: &PoseEuler) -> Self {
         Pose {
@@ -38,6 +55,28 @@ impl From<&PoseEuler> for Pose {
 
 #[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
 pub struct RobotJoints([f32; 6]);
+
+/* == Load ==  */
+
+#[derive(Copy, Clone, Debug)]
+pub struct Load {
+    pub force: Vector3<f32>,
+    pub moment: Vector3<f32>,
+}
+
+impl Load {
+    pub fn new(force: Vector3<f32>, moment: Vector3<f32>) -> Self {
+        Self { force, moment }
+    }
+
+    pub fn array(&self) -> [f32; 6] {
+        let [[fx, fy, fz]] = self.force.data.0;
+        let [[tx, ty, tz]] = self.moment.data.0;
+        [fx, fy, fz, tx, ty, tz]
+    }
+}
+
+/* == Tests == */
 
 #[cfg(test)]
 mod tests {

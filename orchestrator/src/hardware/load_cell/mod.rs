@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 use bincode::{Decode, Encode, error::DecodeError};
 use eyre::{Context, Result};
-use nalgebra::{Rotation3, Vector3};
+use nalgebra::Vector3;
 use reqwest::get;
 use serde::{Deserialize, Serialize};
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
@@ -15,26 +15,17 @@ use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 use crate::{
     config::LoadCellConfig,
     data::sink::{DataSinkBuilder, StreamWriter},
-    defs::PoseEuler,
+    defs::Load,
+    hardware::HardwareAgent,
     misc::network_config,
 };
 
-use super::HardwareAgent;
-
-const API_PATH: &str = "/netftapi2.xml";
 const PORT: u16 = 49152;
 
 const COMMAND_HEADER: u16 = 0x1234;
 const BUFFER_SIZE: usize = 8192; // 8KB
 
-const STANDARD_FORCE_UNIT: &str = "N";
-const STANDARD_TORQUE_UNIT: &str = "Nm";
-const NAME: &str = "load_cell";
-const CHANNELS: [&str; 6] = ["fx", "fy", "fz", "tx", "ty", "tz"];
-
-const DEVICE_CUTOFF_FREQ: [u32; 13] = [0, 838, 326, 152, 73, 35, 18, 8, 5, 1500, 2000, 2500, 3000];
-
-type Data = [f32; CHANNELS.len()];
+const CUTOFF_FREQ_MAP: [u32; 13] = [0, 838, 326, 152, 73, 35, 18, 8, 5, 1500, 2000, 2500, 3000];
 
 pub struct LoadCell {
     inner: Arc<Inner>,
@@ -50,7 +41,6 @@ struct Inner {
 #[derive(Default)]
 struct Shared {
     stream: Option<StreamWriter>,
-    transform: Option<LoadTransform>,
 }
 
 struct Link(UdpSocket);
@@ -99,6 +89,14 @@ pub enum LoadCellInstruction {
 }
 
 impl LoadCell {
+    pub const NAME: &str = "load_cell";
+    pub const CHANNELS: [&str; 6] = ["fx", "fy", "fz", "tx", "ty", "tz"];
+
+    const API_PATH: &str = "/netftapi2.xml";
+
+    const STANDARD_FORCE_UNIT: &str = "N";
+    const STANDARD_TORQUE_UNIT: &str = "Nm";
+
     pub async fn connect_from_config(config: &LoadCellConfig) -> Result<Self> {
         Self::connect(config.ip).await
     }
@@ -140,28 +138,28 @@ impl LoadCell {
         self.inner.link.send(Command::new(0x42)).await
     }
 
-    pub async fn set_tool_offset(&self, offset: PoseEuler) {
-        let transform = LoadTransform::new(offset);
-        self.inner.shared.lock().await.transform = Some(transform);
-    }
-
     async fn fetch_config(ip: IpAddr) -> Result<NetFtApi2> {
-        let xml_str = get(&format!("http://{ip}{API_PATH}")).await?.text().await?;
+        let xml_str = get(&format!("http://{ip}{}", Self::API_PATH))
+            .await?
+            .text()
+            .await?;
 
         let config: NetFtApi2 =
             quick_xml::de::from_str(&xml_str).wrap_err("Failed to parse XML config")?;
 
-        if config.force_unit != STANDARD_FORCE_UNIT {
+        if config.force_unit != Self::STANDARD_FORCE_UNIT {
             tracing::warn!(
-                "Non-standard force unit \"{}\" (expected {STANDARD_FORCE_UNIT})",
-                config.force_unit
+                "Non-standard force unit \"{}\" (expected {})",
+                config.force_unit,
+                Self::STANDARD_FORCE_UNIT
             );
         }
 
-        if config.torque_unit != STANDARD_TORQUE_UNIT {
+        if config.torque_unit != Self::STANDARD_TORQUE_UNIT {
             tracing::warn!(
-                "Non-standard torque unit \"{}\" (expected {STANDARD_TORQUE_UNIT})",
-                config.torque_unit
+                "Non-standard torque unit \"{}\" (expected {})",
+                config.torque_unit,
+                Self::STANDARD_TORQUE_UNIT
             );
         }
 
@@ -176,7 +174,7 @@ impl LoadCell {
         if config.low_pass_filter != 0 {
             tracing::warn!(
                 "Device low-pass filter is enabled ({} Hz)",
-                DEVICE_CUTOFF_FREQ[config.low_pass_filter as usize]
+                CUTOFF_FREQ_MAP[config.low_pass_filter as usize]
             );
         }
 
@@ -194,13 +192,9 @@ impl LoadCell {
 
             if let Some(stream) = &lock.stream {
                 let msg = Message::from_bytes(&buf)?;
-                let mut load = msg.to_load(&inner.config);
+                let load = msg.load(&inner.config);
 
-                if let Some(transform) = &lock.transform {
-                    load = transform.apply(&load);
-                }
-
-                stream.add(&load.as_array()).await;
+                stream.add(&load.array()).await;
             }
 
             buf.clear();
@@ -211,8 +205,8 @@ impl LoadCell {
 #[async_trait]
 impl HardwareAgent for LoadCell {
     async fn register(&mut self, sink: &mut DataSinkBuilder) {
-        let name = NAME.to_owned();
-        let channels = CHANNELS.map(str::to_owned).to_vec();
+        let name = Self::NAME.to_owned();
+        let channels = Self::CHANNELS.map(str::to_owned).to_vec();
         let stream = sink.register_stream(name, channels).await;
 
         self.inner.shared.lock().await.stream = Some(stream);
@@ -229,7 +223,7 @@ impl HardwareAgent for LoadCell {
 
 impl fmt::Display for LoadCell {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{NAME}")
+        write!(f, "{}", Self::NAME)
     }
 }
 
@@ -290,18 +284,12 @@ struct Message {
     tz: i32,
 }
 
-#[derive(Copy, Clone, Debug)]
-struct Load {
-    force: Vector3<f32>,
-    moment: Vector3<f32>,
-}
-
 impl Message {
     fn from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
         Ok(bincode::decode_from_slice(buf, network_config())?.0)
     }
 
-    fn to_load(&self, config: &NetFtApi2) -> Load {
+    fn load(&self, config: &NetFtApi2) -> Load {
         let [fx, fy, fz] = [self.fx, self.fy, self.fz].map(|x| x as f32 / config.force_counts);
         let [tx, ty, tz] = [self.tx, self.ty, self.tz].map(|x| x as f32 / config.torque_counts);
 
@@ -309,44 +297,6 @@ impl Message {
             force: Vector3::new(fx, fy, fz),
             moment: Vector3::new(tx, ty, tz),
         }
-    }
-}
-
-impl Load {
-    fn as_array(&self) -> [f32; 6] {
-        [
-            self.force.x,
-            self.force.y,
-            self.force.z,
-            self.moment.x,
-            self.moment.y,
-            self.moment.z,
-        ]
-    }
-}
-
-/* == Transformation == */
-
-struct LoadTransform {
-    rotation: Rotation3<f32>,
-    translation: Vector3<f32>,
-}
-
-impl LoadTransform {
-    pub fn new(offset: PoseEuler) -> Self {
-        let translation = Vector3::new(offset.x, offset.y, offset.z);
-        let rotation = Rotation3::from_euler_angles(offset.rx, offset.ry, offset.rz);
-
-        Self {
-            rotation,
-            translation,
-        }
-    }
-
-    pub fn apply(&self, load: &Load) -> Load {
-        let force = self.rotation * load.force;
-        let moment = self.rotation * load.moment + self.translation.cross(&force);
-        Load { force, moment }
     }
 }
 

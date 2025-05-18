@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use eyre::Result;
 
 mod convert;
+mod measure;
 mod run;
 mod server;
 mod view;
@@ -16,6 +17,7 @@ struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     Convert(convert::ConvertOpts),
+    Measure(measure::MeasureOpts),
     View(view::ViewOpts),
 
     Run {
@@ -47,6 +49,7 @@ pub fn run() -> Result<()> {
 pub async fn execute_command(command: Command) -> Result<()> {
     match command {
         Command::Convert(opts) => convert::segment(opts).await,
+        Command::Measure(opts) => measure::Measure::run(opts).await,
         Command::Run { config } => run::launch(&config).await,
         Command::Server { config, port } => server::launch(&config, port).await,
         Command::View(opts) => view::view(opts).await,

@@ -13,9 +13,8 @@ use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
 use crate::{
     config::MotionCaptureConfig,
     data::sink::{DataSinkBuilder, StreamWriter},
+    hardware::HardwareAgent,
 };
-
-use super::HardwareAgent;
 
 pub mod protocol;
 
@@ -23,11 +22,6 @@ const COMMAND_PORT: u16 = 1510;
 const DATA_PORT: u16 = 1511;
 
 const BUFFER_SIZE: usize = 16384; // 16 KB
-
-const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
-const NAME: &str = "motion_capture";
-
-type Data = [f32; CHANNELS.len()];
 
 pub struct MotionCapture {
     inner: Arc<MotionCaptureInner>,
@@ -53,6 +47,10 @@ enum TaskError {
 }
 
 impl MotionCapture {
+    pub const NAME: &str = "motion_capture";
+    pub const CHANNELS: [&str; 7] = ["x", "y", "z", "qx", "qy", "qz", "qw"];
+    pub const N_CHANNELS: usize = Self::CHANNELS.len();
+
     pub async fn connect_from_config(config: &MotionCaptureConfig) -> Result<Self> {
         let module = Self::connect(config.ip, config.multicast_ip).await?;
 
@@ -120,25 +118,6 @@ impl MotionCapture {
         Ok(())
     }
 
-    // async fn register_subscriptions(&self, sink: &Sink) -> Result<()> {
-    //     let description = self.inner.description.lock().await;
-    //     let mut subscriptions = self.inner.subscriptions.lock().await;
-
-    //     for subscription in &mut *subscriptions {
-    //         // Rigid body description must exist if a subscription is active
-    //         let rb = description.get_rb(subscription.id).unwrap();
-
-    //         if !sink.has_stream(&rb.name).await {
-    //             let name = format!("{NAME}/{}", rb.name);
-    //             let channels = CHANNELS.map(str::to_owned).to_vec();
-    //             let stream = sink.add_stream(name, channels).await?;
-    //             subscription.stream = Some(stream)
-    //         }
-    //     }
-
-    //     Ok(())
-    // }
-
     async fn receiver_task(inner: Arc<MotionCaptureInner>) -> Result<(), TaskError> {
         let mut buf = Vec::with_capacity(BUFFER_SIZE);
 
@@ -162,7 +141,7 @@ impl MotionCapture {
                 for rb in frame.rigid_bodies {
                     if let Some(subscription) = subscriptions.iter().find(|s| s.id == rb.id) {
                         if let Some(stream) = &subscription.stream {
-                            let data: Data = rb.into();
+                            let data = rb.array();
                             stream.add(&data).await;
                         }
                     }
@@ -218,8 +197,8 @@ impl HardwareAgent for MotionCapture {
     async fn register(&mut self, sink: &mut DataSinkBuilder) {
         for subscription in &mut *self.inner.subscriptions.lock().await {
             if subscription.stream.is_none() {
-                let name = format!("{NAME}/{}", subscription.name);
-                let channels = CHANNELS.map(str::to_owned).to_vec();
+                let name = format!("{}/{}", Self::NAME, subscription.name);
+                let channels = Self::CHANNELS.map(str::to_owned).to_vec();
                 subscription.stream = Some(sink.register_stream(name, channels).await);
             }
         }
@@ -228,7 +207,7 @@ impl HardwareAgent for MotionCapture {
 
 impl fmt::Display for MotionCapture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{NAME}")
+        write!(f, "{}", Self::NAME)
     }
 }
 
@@ -239,13 +218,13 @@ impl Drop for MotionCapture {
     }
 }
 
-impl From<RigidBodyData> for Data {
-    fn from(rb: RigidBodyData) -> Self {
+impl RigidBodyData {
+    pub fn array(self) -> [f32; MotionCapture::N_CHANNELS] {
         let RigidBodyData {
             position: (x, y, z),
             orientation: (qx, qy, qz, qw),
             ..
-        } = rb;
+        } = self;
 
         [x, y, z, qx, qy, qz, qw]
     }

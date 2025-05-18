@@ -8,7 +8,7 @@
       <Value key="0" link="UdpSocket\RemoteControl" />
     </Data>
     <Data name="BASE_POSITION" access="private" xsi:type="array" type="pointRx" size="1">
-      <Value key="0" x="50" y="50" z="300" fatherId="world[0]" />
+      <Value key="0" x="50" y="50" z="300" shoulder="sfree" elbow="efree" wrist="wfree" fatherId="world[0]" />
     </Data>
     <Data name="BASE_POSE" access="private" xsi:type="array" type="jointRx" size="1">
       <Value key="0" j1="-4.75879959898819E-06" j2="-86.5939224981684" j3="136.317941524159" j4="3.68060849006858E-06" j5="40.2759589805294" j6="-2.91771227743379E-06" />
@@ -20,8 +20,8 @@
       <Value key="MotionWorker" value="motionWorker" />
       <Value key="MotionReporter" value="motionReporter" />
       <Value key="MotionSupervisor" value="motionSupervisor" />
-      <Value key="MovingReporter" value="movingReporter" />
       <Value key="SocketHandler" value="socketHandler" />
+      <Value key="MovingReporter" value="movingReporter" />
     </Data>
     <Data name="endEffector" access="private" xsi:type="array" type="tool" size="1">
       <Value key="0" x="660" fatherId="mount[0]" />
@@ -33,7 +33,7 @@
     <Data name="motionType" access="private" xsi:type="array" type="num" size="1" />
     <Data name="reportInterval" access="private" xsi:type="array" type="num" size="1" />
     <Data name="target" access="private" xsi:type="array" type="pointRx" size="1">
-      <Value key="0" fatherId="world[0]" />
+      <Value key="0" shoulder="sfree" elbow="efree" wrist="wfree" fatherId="world[0]" />
     </Data>
     <Data name="NOMINAL_CONFIG" access="private" xsi:type="array" type="mdesc" size="1">
       <Value key="0" accel="25" decel="25" blend="off" />
@@ -41,11 +41,16 @@
     <Data name="SLOW_CONFIG" access="private" xsi:type="array" type="mdesc" size="1">
       <Value key="0" accel="25" decel="25" tmax="150" rmax="50" blend="off" />
     </Data>
-    <Data name="moveConfig" access="private" xsi:type="array" type="mdesc" size="1" />
+    <Data name="moveConfig" access="private" xsi:type="array" type="mdesc" size="1">
+      <Value key="0" blend="off" />
+    </Data>
     <Data name="pose" access="private" xsi:type="array" type="jointRx" size="1" />
     <Data name="selectedTool" access="private" xsi:type="array" type="tool" size="1">
       <Value key="0" fatherId="flange[0]" />
     </Data>
     <Data name="reportEnabled" access="private" xsi:type="array" type="bool" size="1" />
+    <Data name="ARM_CONFIG" access="private" xsi:type="array" type="configRx" size="1">
+      <Value key="0" shoulder="sfree" elbow="efree" wrist="wfree" />
+    </Data>
   </Datas>
 </Database>

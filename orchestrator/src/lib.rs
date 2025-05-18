@@ -10,6 +10,7 @@ pub mod config;
 pub mod data;
 pub mod defs;
 pub mod hardware;
+pub mod learn;
 pub mod misc;
 
 const CRATE: &str = env!("CARGO_CRATE_NAME");
