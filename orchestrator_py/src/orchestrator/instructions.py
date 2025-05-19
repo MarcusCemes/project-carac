@@ -40,7 +40,7 @@ class Joint(Serializable):
         return {"Joint": self.joint}
 
 
-class MotionKind(IntEnum, Serializable):
+class MotionKind(Serializable, IntEnum):
     Linear = 0
     Direct = 1
     Joint = 2

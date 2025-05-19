@@ -68,7 +68,9 @@ pub struct WindShapeConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SinkConfig {
+    pub disable_audio: bool,
     pub session_path: Option<PathBuf>,
+
     #[serde(deserialize_with = "deserialize_null_to_default")]
     pub plot_juggler: Option<PlotJugglerConfig>,
 }

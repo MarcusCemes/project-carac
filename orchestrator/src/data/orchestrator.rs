@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
 use crate::{
+    audio::{AudioFile, AudioPlayer},
     config::Config,
     data::{experiment::Run, session::Session, sink::DataSink},
     hardware::{
@@ -15,6 +16,7 @@ use crate::{
 };
 
 pub struct Orchestrator {
+    audio: Option<AudioPlayer>,
     context: HardwareContext,
     session: Session,
     sink: DataSink,
@@ -36,9 +38,14 @@ impl Orchestrator {
             }
         }
 
+        let audio = (!config.sink.disable_audio)
+            .then_some(())
+            .and_then(|_| AudioPlayer::try_new().ok());
+
         let session = Session::open(path, streams).await?;
 
         Ok(Self {
+            audio,
             context,
             session,
             sink,
@@ -71,11 +78,24 @@ impl Orchestrator {
     }
 
     pub async fn record(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
+        if let Some(audio) = &self.audio {
+            let _ = audio.queue(AudioFile::BeepUp);
+        }
+
         self.sink.start_recording().await;
 
-        self.execute(instructions).await?;
+        self.execute(instructions).await.inspect_err(|_| {
+            if let Some(audio) = &self.audio {
+                let _ = audio.queue(AudioFile::BeepDouble);
+            }
+        })?;
 
         let run = self.sink.stop_recording().await;
+
+        if let Some(audio) = &self.audio {
+            let _ = audio.queue(AudioFile::BeepDown);
+        }
+
         self.session.append_run(&run).await?;
 
         Ok(run)

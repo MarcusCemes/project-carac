@@ -5,6 +5,7 @@ use std::io;
 use eyre::Result;
 use tracing_subscriber::EnvFilter;
 
+mod audio;
 pub mod cli;
 pub mod config;
 pub mod data;
