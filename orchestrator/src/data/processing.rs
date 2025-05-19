@@ -256,13 +256,22 @@ impl StreamFilter {
     pub fn apply(&self, stream: &mut RecordedStream) -> Result<()> {
         let n_samples = stream.timestamps.len();
 
+        if n_samples == 0 {
+            tracing::warn!("Stream empty, not filtering!");
+            return Ok(());
+        }
+
         let duration = stream
             .timestamps
             .last()
             .map(|&t| f32::from(t))
             .wrap_err("Insufficient data in stream")?;
 
-        let sample_rate = duration as f64 / n_samples as f64;
+        let sample_rate = n_samples as f64 / duration as f64;
+
+        tracing::debug!(
+            "duration: {duration:.1} s, sample_rate: {sample_rate:.0} Hz, n_samples: {n_samples}"
+        );
 
         let filter = Filter::new(
             Self::ORDER,
@@ -315,7 +324,7 @@ impl LoadTransform {
 
     pub fn apply(&self, load: &Load) -> Load {
         let force = self.rotation * load.force;
-        let torque = self.rotation * load.moment + self.translation.cross(&force);
-        Load { force, moment: torque }
+        let moment = self.rotation * load.moment + self.translation.cross(&force);
+        Load { force, moment }
     }
 }

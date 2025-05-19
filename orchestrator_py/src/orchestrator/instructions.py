@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
+from enum import IntEnum
+from typing import Any
 
 
 class Serializable:
 
-    def toJSON(self):
+    def toJSON(self) -> Any:
         data = self.__dict__.copy()
         name = data.pop("_name", self.__class__.__name__)
 
@@ -38,13 +40,22 @@ class Joint(Serializable):
         return {"Joint": self.joint}
 
 
+class MotionKind(IntEnum, Serializable):
+    Linear = 0
+    Direct = 1
+    Joint = 2
+
+    def toJSON(self):
+        self.value
+
+
 @dataclass
 class Profile(Serializable):
-    translation_limit: float = field(default=10000.0, metadata={"ge": 0})
-    rotation_limit: float = field(default=10000.0, metadata={"ge": 0})
-    acceleration_scale: int = field(default=100, metadata={"ge": 0, "le": 100})
-    velocity_scale: int = field(default=100, metadata={"ge": 0, "le": 100})
-    deceleration_scale: int = field(default=100, metadata={"ge": 0, "le": 100})
+    translation_limit: float = 10000.0
+    rotation_limit: float = 10000.0
+    acceleration_scale: int = 100
+    velocity_scale: int = 100
+    deceleration_scale: int = 100
 
 
 @dataclass
@@ -107,8 +118,13 @@ class WaitSettled(Serializable):
 
 
 @dataclass
+class GoHome(Serializable):
+    type: MotionKind = MotionKind.Joint
+
+
+@dataclass
 class RobotArm(Serializable):
-    type: Move | SetConfig | SetOffset | SetProfile | WaitSettled
+    type: Move | GoHome | SetConfig | SetOffset | SetProfile | WaitSettled
 
 
 # == Wind Shape == #
@@ -154,4 +170,9 @@ class Sleep:
         }
 
 
-Instruction = LoadCell | RobotArm | WindShape | Sleep
+@dataclass
+class Reset(Serializable):
+    pass
+
+
+Instruction = LoadCell | RobotArm | WindShape | Sleep | Reset

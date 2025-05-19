@@ -22,16 +22,20 @@ class Orchestrator:
     # == Commands == #
 
     def execute(self, instructions: list[Instruction]):
-        return self._client.post(
-            "/execute",
-            json={"instructions": [i.toJSON() for i in instructions]},
-        ).raise_for_status()
+        return self.handle_request(
+            self._client.post(
+                "/execute",
+                json={"instructions": [i.toJSON() for i in instructions]},
+            )
+        )
 
     def record(self, instructions: list[Instruction]):
-        return self._client.post(
-            "/record",
-            json={"instructions": [i.toJSON() for i in instructions]},
-        ).raise_for_status()
+        return self.handle_request(
+            self._client.post(
+                "/record",
+                json={"instructions": [i.toJSON() for i in instructions]},
+            )
+        )
 
     def new_experiment(self, name: str):
         return self._client.post(
@@ -44,3 +48,11 @@ class Orchestrator:
 
     def status(self) -> str:
         return self._client.get("/status", timeout=3).text
+
+    @staticmethod
+    def handle_request(request):
+        if request.is_error:
+            print(f"Request failed: {request.text}")
+            request.raise_for_status()
+
+        return request

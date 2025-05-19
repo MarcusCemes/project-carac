@@ -4,5 +4,8 @@
       "name": "rclpy",
       "depth": 8
     }
-  ]
+  ],
+  "rust-analyzer.cargo.extraEnv": {
+    "CARGO_TARGET_DIR": "target-lsp"
+  }
 }

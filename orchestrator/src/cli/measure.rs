@@ -12,7 +12,7 @@ use crate::{
     hardware::{
         HardwareContext,
         load_cell::LoadCell,
-        robot_arm::{Motion, MotionDiscriminants},
+        robot_arm::{Motion, MotionDiscriminants, SpeedProfile},
     },
     misc::data::deinterleave_data,
 };
@@ -41,7 +41,7 @@ impl Measure {
     ];
 
     const OFFSET_X: f32 = 175.;
-    const MEASUREMENT_TIME_S: f32 = 0.5;
+    const MEASUREMENT_TIME_S: f32 = 1.;
 
     pub async fn run(opts: MeasureOpts) -> Result<()> {
         let config = Config::load(&opts.config).await?;
@@ -75,10 +75,20 @@ impl Measure {
             })
             .await?;
 
+        controller
+            .set_profile(SpeedProfile {
+                acceleration_scale: 25,
+                deceleration_scale: 25,
+                translation_limit: 500.,
+                rotation_limit: 180.,
+                ..Default::default()
+            })
+            .await?;
+
         let mut runs: Vec<Run> = Vec::with_capacity(Self::POSES.len());
 
         for pose in Self::POSES {
-            controller.move_to(Motion::Linear(pose)).await?;
+            controller.move_to(Motion::Direct(pose)).await?;
             controller.wait_settled().await?;
 
             sink.start_recording().await;
@@ -94,9 +104,9 @@ impl Measure {
         let mut results = Vec::with_capacity(runs.len());
 
         for mut run in runs {
-            let mut stream = run.get_stream_mut(LoadCell::NAME, &streams).unwrap();
+            let stream = run.get_stream_mut(LoadCell::NAME, &streams).unwrap();
 
-            StreamFilter::new(opts.cutoff_frequency as f64).apply(&mut stream)?;
+            StreamFilter::new(opts.cutoff_frequency as f64).apply(stream)?;
 
             let channels: [_; 6] =
                 deinterleave_data(&stream.channel_data, LoadCell::CHANNELS.len())
@@ -125,9 +135,13 @@ impl Measure {
 
         let m = mg / G;
 
-        println!("Force:  {mg} N ({m} kg)");
-        println!("Offset: {o} m");
-        println!("Bias:   {} N, {} Nm", bias.force, bias.moment);
+        println!("Force:  {mg} N ({m} kg)\n");
+        println!("Offset [m]{o}");
+
+        println!(
+            "Force bias [N]{}\nMoment bias [Nm]{}",
+            bias.force, bias.moment
+        );
 
         Ok(())
     }
@@ -164,7 +178,15 @@ fn solve_resultant_force(loads: [Load; 3], bias: Load) -> (f32, Vector3<f32>) {
     let mg1 = loads[1].force.x - bias.force.x;
     let mg2 = bias.force.y - loads[2].force.y;
 
-    let mg = (mg0 + mg1 + mg2) / 3.;
+    let mg = if mg0 * mg1 * mg2 >= 0. {
+        (mg0 + mg1 + mg2) / 3.
+    } else {
+        tracing::warn!(
+            "Measured force signs are inconsistent! The load cell may require a z=+180° rotation transform."
+        );
+
+        (mg0.abs() + mg1.abs() + mg2.abs()) / 3.
+    };
 
     let mgo_x = (loads[0].moment.y - bias.moment.y) + (bias.moment.z - loads[2].moment.z);
     let mgo_y = (bias.moment.x - loads[0].moment.x) + (bias.moment.z - loads[1].moment.z);

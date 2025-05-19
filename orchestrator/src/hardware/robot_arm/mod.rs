@@ -82,6 +82,7 @@ struct MotionState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum RobotArmInstruction {
     Move(Motion),
+    GoHome(MotionDiscriminants),
     SetConfig([u8; 3]),
     SetOffset(PoseEuler),
     SetProfile(SpeedProfile),
@@ -119,6 +120,7 @@ impl RobotArm {
     pub async fn execute(&mut self, instruction: RobotArmInstruction) -> Result<()> {
         let command = match instruction {
             RobotArmInstruction::Move(motion) => RobotCommand::Move(motion),
+            RobotArmInstruction::GoHome(kind) => RobotCommand::ReturnHome(kind),
             RobotArmInstruction::SetConfig(config) => RobotCommand::SetConfig(config),
             RobotArmInstruction::SetOffset(offset) => RobotCommand::SetToolOffset(offset),
             RobotArmInstruction::SetProfile(profile) => RobotCommand::SetSpeedProfile(profile),
@@ -138,7 +140,8 @@ impl RobotArm {
         loop {
             buf.clear();
 
-            socket.recv_buf_from(&mut buf).await?;
+            let (size, addr) = socket.recv_buf_from(&mut buf).await?;
+            tracing::debug!("{size} {addr:?}");
 
             if let Response::Ack(0) = Response::decode(&buf[..])? {
                 break;
@@ -206,8 +209,6 @@ impl RobotArm {
         }
     }
 
-    // async fn wait_positive_settle_edge(receiver: &mut watch::Receiver<Op>)
-
     async fn wait_for_settled_value(
         receiver: &mut watch::Receiver<Option<State>>,
         value: bool,
@@ -226,6 +227,10 @@ impl RobotArm {
 
         loop {
             inner.socket.recv_buf(&mut buf).await?;
+
+            if buf[1] != 1 {
+                tracing::trace!("Got message, {:?}", &buf[0..3]);
+            }
 
             match Response::decode(&buf[..])? {
                 Response::Status(state) => {
@@ -363,9 +368,38 @@ pub enum RobotCommand {
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, EnumDiscriminants)]
 pub enum Motion {
+    Linear(PoseEuler),
     Direct(PoseEuler),
     Joint(RobotJoints),
-    Linear(PoseEuler),
+}
+
+impl From<u8> for MotionDiscriminants {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => MotionDiscriminants::Linear,
+            1 => MotionDiscriminants::Direct,
+            2 => MotionDiscriminants::Joint,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MotionDiscriminants {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(u8::deserialize(deserializer)?.into())
+    }
+}
+
+impl Serialize for MotionDiscriminants {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        (*self as u8).serialize(serializer)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
@@ -508,6 +542,10 @@ impl Response {
         }
 
         let response = match buf.get_u8() {
+            0x00 => {
+                panic!("Picked up handshake request, this may be loopback traffic!");
+            }
+
             0x01 => {
                 let status = get_value(buf).unwrap();
                 Response::Status(status)

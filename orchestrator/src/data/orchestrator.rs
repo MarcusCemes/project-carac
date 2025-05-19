@@ -63,7 +63,8 @@ impl Orchestrator {
 
     pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<()> {
         for instruction in instructions {
-            self.execute_instruction(instruction).await?;
+            let r = self.execute_instruction(instruction).await;
+            r?;
         }
 
         Ok(())
@@ -103,6 +104,12 @@ impl Orchestrator {
             Instruction::Sleep(duration) => {
                 sleep(duration).await;
             }
+
+            Instruction::Reset => {
+                for device in self.context.iter_mut() {
+                    device.reset_error().await;
+                }
+            }
         }
 
         Ok(())
@@ -137,6 +144,7 @@ pub enum Instruction {
     RobotArm(RobotArmInstruction),
     WindShape(WindShapeInstruction),
     Sleep(Duration),
+    Reset,
 }
 
 /* == Misc == */

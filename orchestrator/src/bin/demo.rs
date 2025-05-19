@@ -165,7 +165,7 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
 
     robot_arm.start().await;
 
-    let mut r = robot_arm.controller();
+    let r = robot_arm.controller();
 
     let mut point = PoseEuler {
         x: 500.,

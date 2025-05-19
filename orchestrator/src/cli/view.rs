@@ -37,7 +37,13 @@ pub async fn view(opts: ViewOpts) -> Result<()> {
     }
 
     for (i, run) in experiment.runs.iter().enumerate() {
+        let duration = match run.duration() {
+            Some(duration) => format!("{:.03} s", f32::from(duration)),
+            None => "N/A".to_string(),
+        };
+
         println!("\n\n# == Run {i} == #");
+        println!("\nDuration  {duration}",);
 
         for ((stream, &n_channels), name) in run
             .recorded_streams
