@@ -32,6 +32,14 @@ impl Session {
     const EXPERIMENTS_DIR: &str = "experiments";
     const TEMP_EXPERIMENT_NAME: &str = "_current";
 
+    /* == Accessors == */
+
+    pub fn metadata(&self) -> &SessionMetadata {
+        &self.metadata
+    }
+
+    /* == Persistence == */
+
     pub async fn open(path: PathBuf, streams: Vec<StreamInfo>) -> Result<Self> {
         fs::create_dir_all(&path).await?;
 
@@ -100,12 +108,32 @@ impl Session {
         Ok(())
     }
 
-    pub fn metadata(&self) -> &SessionMetadata {
-        &self.metadata
+    pub async fn list_experiments(&self) -> Result<Vec<(u32, PathBuf)>> {
+        let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
+        let mut files = fs::read_dir(dir).await?;
+
+        let mut experiments = Vec::new();
+
+        while let Some(entry) = files.next_entry().await? {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(id) = Self::extract_id(name) {
+                    let path = entry.path();
+                    experiments.push((id, path));
+                }
+            }
+        }
+
+        Ok(experiments)
     }
 
-    fn experiment_name(id: u32, name: &str) -> String {
+    /* == Misc == */
+
+    pub fn experiment_name(id: u32, name: &str) -> String {
         format!("{id:04}_{name}")
+    }
+
+    pub fn output_name(id: u32, run: usize, extension: &str) -> String {
+        format!("{id:04}_{run}.{extension}")
     }
 
     async fn next_experiment_number(&self) -> Result<u32> {

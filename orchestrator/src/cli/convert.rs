@@ -1,4 +1,8 @@
-use std::{io, path::PathBuf};
+use std::{
+    fs::File,
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use clap::{Parser, ValueEnum};
 use eyre::{ContextCompat, Result, eyre};
@@ -20,6 +24,9 @@ pub struct ConvertOpts {
 
     #[clap(short, long, default_value_t = DEFAULT_DIVISIONS)]
     pub divisions: u32,
+
+    #[clap(short, long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -41,16 +48,24 @@ pub async fn segment(opts: ConvertOpts) -> Result<()> {
     let metadata = maybe_metadata.unwrap_or_else(|| experiment.guess_metadata());
 
     let mut df = run.dataframe(&metadata.streams, opts.divisions)?;
+    let mut output = get_output(opts.clone())?;
 
     match opts.format {
         OutputFormat::Csv => {
-            CsvWriter::new(&mut io::stdout()).finish(&mut df)?;
+            CsvWriter::new(&mut output).finish(&mut df)?;
         }
 
         OutputFormat::Parquet => {
-            ParquetWriter::new(&mut io::stdout()).finish(&mut df)?;
+            ParquetWriter::new(&mut output).finish(&mut df)?;
         }
     }
 
     Ok(())
+}
+
+fn get_output(opts: ConvertOpts) -> Result<Box<dyn Write>> {
+    Ok(match opts.output {
+        Some(path) => Box::new(File::create(path)?),
+        None => Box::new(io::stdout()),
+    })
 }

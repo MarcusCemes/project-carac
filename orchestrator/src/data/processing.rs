@@ -273,8 +273,9 @@ impl StreamFilter {
 
         let sample_rate = n_samples as f64 / duration as f64;
 
-        tracing::debug!(
-            "duration: {duration:.1} s, sample_rate: {sample_rate:.0} Hz, n_samples: {n_samples}"
+        tracing::trace!(
+            "Applying Butterworth ({:.1} Hz) (est. rate: {sample_rate:.0} Hz, {n_samples} over {duration:.1} s)",
+            self.cutoff_frequency
         );
 
         let filter = Filter::new(

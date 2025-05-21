@@ -244,6 +244,10 @@ impl RecordedStream {
         }
     }
 
+    pub fn time_column(&self) -> Vec<f32> {
+        self.timestamps.iter().copied().map(f32::from).collect()
+    }
+
     pub fn columns(&self) -> Vec<Box<[f32]>> {
         let n_samples = self.timestamps.len();
         let n_channels = self.n_channels;
