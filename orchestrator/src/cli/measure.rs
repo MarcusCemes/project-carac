@@ -18,6 +18,7 @@ use crate::{
 };
 
 const G: f32 = 9.80665;
+const CUTOFF_FREQUENCY: f32 = 5.0;
 
 #[derive(Clone, Debug, Parser)]
 pub struct MeasureOpts {
@@ -27,7 +28,7 @@ pub struct MeasureOpts {
     #[clap(long, default_value_t = Measure::MEASUREMENT_TIME_S)]
     sample_duration: f32,
 
-    #[clap(long, default_value_t = 10.)]
+    #[clap(long, default_value_t = CUTOFF_FREQUENCY)]
     cutoff_frequency: f32,
 }
 
@@ -65,6 +66,19 @@ impl Measure {
         let robot_arm = context.robot_arm.as_mut().unwrap();
         let controller = robot_arm.controller();
 
+        controller.set_offset(PoseEuler::default()).await?;
+        controller.set_config([0, 0, 0]).await?;
+
+        controller
+            .set_profile(SpeedProfile {
+                acceleration_scale: 30,
+                deceleration_scale: 30,
+                translation_limit: 500.,
+                rotation_limit: 180.,
+                ..Default::default()
+            })
+            .await?;
+
         controller.go_home(MotionDiscriminants::Direct).await?;
         controller.wait_settled().await?;
 
@@ -75,21 +89,15 @@ impl Measure {
             })
             .await?;
 
-        controller
-            .set_profile(SpeedProfile {
-                acceleration_scale: 25,
-                deceleration_scale: 25,
-                translation_limit: 500.,
-                rotation_limit: 180.,
-                ..Default::default()
-            })
-            .await?;
-
         let mut runs: Vec<Run> = Vec::with_capacity(Self::POSES.len());
 
         for pose in Self::POSES {
+            tracing::info!("Moving to pose...");
             controller.move_to(Motion::Direct(pose)).await?;
             controller.wait_settled().await?;
+
+            tracing::info!("Stabilising...");
+            sleep(Duration::from_secs(2)).await;
 
             sink.start_recording().await;
             sleep(Duration::from_secs_f32(opts.sample_duration)).await;

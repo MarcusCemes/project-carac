@@ -2,16 +2,29 @@ use std::{
     fmt, iter,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
     time::Duration,
 };
 
 use async_trait::async_trait;
 use eyre::{Context, Result, eyre};
 use serde::{Deserialize, Serialize};
-use tokio::{io, net::UdpSocket, select, sync::watch, task::JoinSet, time::interval};
+use tokio::{
+    io,
+    net::UdpSocket,
+    select,
+    sync::{Mutex, watch},
+    task::JoinSet,
+    time::{MissedTickBehavior, interval},
+};
 
-use crate::{config::WindShapeConfig, data::sink::DataSinkBuilder};
+use crate::{
+    config::WindShapeConfig,
+    data::sink::{DataSinkBuilder, StreamWriter},
+};
 
 use super::HardwareAgent;
 
@@ -27,26 +40,28 @@ const STATUS_INTERVAL: Duration = Duration::from_millis(40);
 const RX_BUFFER_SIZE: usize = 65536;
 
 pub struct WindShape {
+    inner: Arc<Inner>,
+
     client_id: u8,
     link: Link,
 
-    config: Config,
     request_control: watch::Sender<bool>,
     status: watch::Receiver<Status>,
 
     tasks: JoinSet<()>,
 }
 
+#[derive(Default)]
+pub struct Inner {
+    enable_power: AtomicBool,
+    fan_speed: AtomicU8,
+    stream: Mutex<Option<StreamWriter>>,
+}
+
 #[derive(Clone)]
 struct Link {
     addr: SocketAddr,
     socket: Arc<UdpSocket>,
-}
-
-#[derive(Default)]
-struct Config {
-    enable_power: bool,
-    fan_speed: u8,
 }
 
 #[derive(Default)]
@@ -74,12 +89,15 @@ enum ResponsePayload {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum WindShapeInstruction {
     EnablePower(bool),
-    ReleaseControl,
-    RequestControl,
     SetWindSpeed(u8),
 }
 
 impl WindShape {
+    pub const NAME: &str = "wind_shape";
+    pub const CHANNELS: [&str; 1] = ["fan_speed"];
+
+    pub const STREAM_INTERVAL: Duration = Duration::from_millis(250);
+
     pub async fn connect_from_config(config: &WindShapeConfig) -> Result<Self> {
         Self::connect(config.ip).await
     }
@@ -94,14 +112,18 @@ impl WindShape {
 
         tracing::info!("Handshake successful!");
 
+        let inner = Arc::new(Inner::default());
+
         // Spawn background tasks to send and receive status messages
-        let (status, request_control, task_handle) = Self::spawn_tasks(client_id, link.clone());
+        let (status, request_control, task_handle) =
+            Self::spawn_tasks(inner.clone(), client_id, link.clone());
 
         Ok(WindShape {
+            inner,
+
             client_id,
             link,
 
-            config: Default::default(),
             request_control,
 
             status,
@@ -115,17 +137,6 @@ impl WindShape {
         match instruction {
             WindShapeInstruction::EnablePower(true) => self.enable_power().await,
             WindShapeInstruction::EnablePower(false) => self.disable_power().await,
-
-            WindShapeInstruction::ReleaseControl => {
-                self.release_control().await;
-                Ok(())
-            }
-
-            WindShapeInstruction::RequestControl => {
-                self.request_control().await;
-                Ok(())
-            }
-
             WindShapeInstruction::SetWindSpeed(speed) => self.set_fan_speed(speed).await,
         }
     }
@@ -138,18 +149,18 @@ impl WindShape {
     }
 
     pub async fn enable_power(&mut self) -> Result<()> {
-        self.config.enable_power = true;
+        self.inner.enable_power.store(true, Ordering::Relaxed);
         self.send_module_state().await
     }
 
     pub async fn disable_power(&mut self) -> Result<()> {
-        self.config.enable_power = false;
-        self.config.fan_speed = 0;
+        self.inner.enable_power.store(false, Ordering::Relaxed);
+        self.inner.fan_speed.store(0, Ordering::Relaxed);
         self.send_module_state().await
     }
 
     pub async fn set_fan_speed(&mut self, fan_speed: u8) -> Result<()> {
-        self.config.fan_speed = fan_speed;
+        self.inner.fan_speed.store(fan_speed, Ordering::Relaxed);
         self.send_module_state().await
     }
 
@@ -170,9 +181,12 @@ impl WindShape {
     /* == Socket == */
 
     async fn send_module_state(&self) -> Result<()> {
+        let enable_power = self.inner.enable_power.load(Ordering::Relaxed);
+        let fan_speed = self.inner.fan_speed.load(Ordering::Relaxed);
+
         let request = Request::Module {
-            enable_power: self.config.enable_power,
-            fan_speed: self.config.fan_speed,
+            enable_power,
+            fan_speed,
         };
 
         self.link
@@ -184,24 +198,46 @@ impl WindShape {
     /* == Background tasks == */
 
     fn spawn_tasks(
+        inner: Arc<Inner>,
         client_id: u8,
         socket: Link,
     ) -> (watch::Receiver<Status>, watch::Sender<bool>, JoinSet<()>) {
         let (status_tx, status_rx) = watch::channel(Status::default());
         let (state_tx, state_rx) = watch::channel(false);
 
+        let stream_task = Self::stream_task(inner.clone());
         let sender_task = Self::send_status(client_id, socket.clone(), state_rx);
         let receiver_task = Self::receive_status(client_id, socket, status_tx);
 
         let mut set = JoinSet::new();
+        set.spawn(stream_task);
         set.spawn(sender_task);
         set.spawn(receiver_task);
 
         (status_rx, state_tx, set)
     }
 
+    async fn stream_task(inner: Arc<Inner>) {
+        let mut timer = interval(Self::STREAM_INTERVAL);
+
+        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            timer.tick().await;
+
+            if let Ok(maybe_stream) = inner.stream.try_lock() {
+                if let Some(stream) = maybe_stream.as_ref() {
+                    let fan_speed = inner.fan_speed.load(Ordering::Relaxed);
+                    stream.add(&[fan_speed as f32]).await;
+                }
+            }
+        }
+    }
+
     async fn send_status(client_id: u8, socket: Link, mut control: watch::Receiver<bool>) {
         let mut timer = interval(STATUS_INTERVAL);
+
+        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             // Wait for either the control state to change or the timer to tick
@@ -256,7 +292,22 @@ impl fmt::Display for WindShape {
 
 #[async_trait]
 impl HardwareAgent for WindShape {
-    async fn register(&mut self, _sink: &mut DataSinkBuilder) {}
+    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+        let name = Self::NAME.to_owned();
+        let channels = Self::CHANNELS.map(str::to_owned).to_vec();
+
+        let stream = sink.register_stream(name, channels).await;
+
+        *self.inner.stream.lock().await = Some(stream);
+    }
+
+    async fn start(&mut self) {
+        self.request_control().await;
+    }
+
+    async fn stop(&mut self) {
+        self.release_control().await;
+    }
 }
 
 impl Drop for WindShape {

@@ -55,14 +55,21 @@ impl SegmentedRun {
         let (mut rows, mut buffer) = self.rows(run)?;
 
         let n_samples = rows.time.total;
+        let width = buffer.len();
+
         let mut time = Vec::with_capacity(n_samples);
 
-        let streams = (0..buffer.len())
+        let mut streams = (0..width)
             .map(|_| Vec::with_capacity(n_samples))
-            .collect();
+            .collect::<Vec<_>>();
 
         while let Some(data) = rows.next(&mut buffer) {
             time.push(data);
+
+            for i in 0..width {
+                // SAFETY: streams and buffer are both of size (0..width)
+                unsafe { streams.get_unchecked_mut(i).push(*buffer.get_unchecked(i)) };
+            }
         }
 
         Some(SegmentedRunColumns { time, streams })
@@ -144,9 +151,6 @@ impl StreamInterpolator<'_> {
         };
 
         let cursor_time = f32::from(cursor.time);
-
-        // The cursor can't go backwards (RunSample iterator is uni-directional)
-        assert!(time >= cursor_time, "Time went backwards");
 
         // Keep advancing the cursor until we find the closest pre-time sample
         while let Some(next_sample) = self.iter_samples.peek() {

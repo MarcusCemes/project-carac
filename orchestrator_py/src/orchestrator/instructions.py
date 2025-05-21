@@ -15,8 +15,12 @@ class Serializable:
 
             case 1:
                 [value] = data.values()
-                value = value.toJSON() if isinstance(value, Serializable) else value
-                return {name: value}
+
+                try:
+                    return {name: value.toJSON()}
+
+                except Exception:
+                    return {name: value}
 
             case _:
                 return data
@@ -31,6 +35,16 @@ class Point(Serializable):
     ry: float = 0.0
     rz: float = 0.0
 
+    def add(self, rhs: "Point"):
+        return Point(
+            x=self.x + rhs.x,
+            y=self.y + rhs.y,
+            z=self.z + rhs.z,
+            rx=self.rx + rhs.rx,
+            ry=self.ry + rhs.ry,
+            rz=self.rz + rhs.rz,
+        )
+
 
 @dataclass
 class Joint(Serializable):
@@ -44,9 +58,17 @@ class MotionKind(Serializable, IntEnum):
     Linear = 0
     Direct = 1
     Joint = 2
+    Circular = 3
 
     def toJSON(self):
-        self.value
+        return self.value
+
+
+@dataclass
+class Blending(Serializable):
+    kind: int = 0
+    leave: int = 50
+    reach: int = 50
 
 
 @dataclass
@@ -76,7 +98,16 @@ class MotionLinear(Serializable):
     _name: str = field(default="Linear")
 
 
-Motion = MotionDirect | MotionJoint | MotionLinear
+@dataclass
+class MotionCircular(Serializable):
+    intermediate: Point
+    point: Point
+
+    def toJSON(self) -> Any:
+        return {"Circular": [self.intermediate.toJSON(), self.point.toJSON()]}
+
+
+Motion = MotionDirect | MotionJoint | MotionLinear | MotionCircular
 
 
 @dataclass
@@ -98,6 +129,11 @@ class Move(Serializable):
 
 
 @dataclass
+class SetBlending(Serializable):
+    blending: Blending
+
+
+@dataclass
 class SetConfig(Serializable):
     config: list[int]
 
@@ -113,6 +149,11 @@ class SetProfile(Serializable):
 
 
 @dataclass
+class SetReportInterval(Serializable):
+    interval_s: float = 0.1
+
+
+@dataclass
 class WaitSettled(Serializable):
     pass
 
@@ -121,10 +162,22 @@ class WaitSettled(Serializable):
 class GoHome(Serializable):
     type: MotionKind = MotionKind.Joint
 
+    def toJSON(self):
+        return {"GoHome": self.type.toJSON()}
+
 
 @dataclass
 class RobotArm(Serializable):
-    type: Move | GoHome | SetConfig | SetOffset | SetProfile | WaitSettled
+    type: (
+        Move
+        | GoHome
+        | SetBlending
+        | SetConfig
+        | SetOffset
+        | SetProfile
+        | SetReportInterval
+        | WaitSettled
+    )
 
 
 # == Wind Shape == #
@@ -136,23 +189,13 @@ class EnablePower(Serializable):
 
 
 @dataclass
-class ReleaseControl(Serializable):
-    pass
-
-
-@dataclass
-class RequestControl(Serializable):
-    pass
-
-
-@dataclass
 class SetWindSpeed(Serializable):
     speed: int = 0
 
 
 @dataclass
 class WindShape(Serializable):
-    type: EnablePower | ReleaseControl | RequestControl | SetWindSpeed
+    type: EnablePower | SetWindSpeed
 
 
 @dataclass

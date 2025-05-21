@@ -83,9 +83,11 @@ struct MotionState {
 pub enum RobotArmInstruction {
     Move(Motion),
     GoHome(MotionDiscriminants),
+    SetBlending(Blending),
     SetConfig([u8; 3]),
     SetOffset(PoseEuler),
     SetProfile(SpeedProfile),
+    SetReportInterval(f32),
     WaitSettled,
 }
 
@@ -121,9 +123,11 @@ impl RobotArm {
         let command = match instruction {
             RobotArmInstruction::Move(motion) => RobotCommand::Move(motion),
             RobotArmInstruction::GoHome(kind) => RobotCommand::ReturnHome(kind),
+            RobotArmInstruction::SetBlending(blending) => RobotCommand::SetBlending(blending),
             RobotArmInstruction::SetConfig(config) => RobotCommand::SetConfig(config),
             RobotArmInstruction::SetOffset(offset) => RobotCommand::SetToolOffset(offset),
             RobotArmInstruction::SetProfile(profile) => RobotCommand::SetSpeedProfile(profile),
+            RobotArmInstruction::SetReportInterval(t) => RobotCommand::SetReportInterval(t),
             RobotArmInstruction::WaitSettled => return Ok(self.try_wait_settled().await?),
         };
 
@@ -359,6 +363,7 @@ pub enum RobotCommand {
     Hello,
     Move(Motion),
     ReturnHome(MotionDiscriminants),
+    SetBlending(Blending),
     SetConfig([u8; 3]),
     SetReportInterval(f32),
     SetSpeedProfile(SpeedProfile),
@@ -371,6 +376,7 @@ pub enum Motion {
     Linear(PoseEuler),
     Direct(PoseEuler),
     Joint(RobotJoints),
+    Circular([PoseEuler; 2]),
 }
 
 impl From<u8> for MotionDiscriminants {
@@ -411,6 +417,13 @@ pub struct SpeedProfile {
     pub deceleration_scale: u8,
 }
 
+#[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
+pub struct Blending {
+    pub kind: u8,
+    pub leave: u8,
+    pub reach: u8,
+}
+
 /* == Command == */
 
 impl RobotCommand {
@@ -429,11 +442,22 @@ impl RobotCommand {
             }
 
             RobotCommand::Move(motion) => {
-                b.put_u8(0x02 + MotionDiscriminants::from(motion).id());
+                let mut id = 0x02 + MotionDiscriminants::from(motion).id();
+
+                if MotionDiscriminants::from(motion) == MotionDiscriminants::Circular {
+                    id = 0x0c;
+                }
+
+                b.put_u8(id);
 
                 match motion {
                     Motion::Linear(point) | Motion::Direct(point) => put_value(b, point),
                     Motion::Joint(joint) => put_value(b, joint),
+
+                    Motion::Circular([i, t]) => {
+                        put_value(b, i);
+                        put_value(b, t);
+                    }
                 }
             }
 
@@ -465,6 +489,13 @@ impl RobotCommand {
             RobotCommand::SetConfig(config) => {
                 b.put_u8(0x0A);
                 b.put_slice(config);
+            }
+
+            RobotCommand::SetBlending(blending) => {
+                b.put_u8(0x0B);
+                b.put_u8(blending.kind);
+                b.put_u8(blending.leave);
+                b.put_u8(blending.reach);
             }
         };
     }
@@ -527,6 +558,7 @@ impl MotionDiscriminants {
             MotionDiscriminants::Linear => 0,
             MotionDiscriminants::Direct => 1,
             MotionDiscriminants::Joint => 2,
+            MotionDiscriminants::Circular => 3,
         }
     }
 }
