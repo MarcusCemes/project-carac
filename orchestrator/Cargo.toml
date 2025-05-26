@@ -33,9 +33,9 @@ version = "0.8"
 default-features = false
 features = ["http1", "json", "tokio"]
 
-# [dependencies.burn]
-# version = "0.17"
-# features = ["train", "wgpu"]
+[dependencies.burn]
+version = "0.17"
+features = ["train", "wgpu"]
 
 [dependencies.polars]
 version = "0.47"

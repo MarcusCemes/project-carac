@@ -30,34 +30,27 @@ pub struct HardwareConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadCellConfig {
     pub ip: IpAddr,
-
-    #[serde(default)]
-    pub filters: Filters,
+    #[serde(default = "LoadCellConfig::update_settings")]
+    pub update_settings: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MotionCaptureConfig {
     pub ip: IpAddr,
-    #[serde(default = "default_multicast_addr")]
+    #[serde(default = "MotionCaptureConfig::multicast_addr")]
     pub multicast_ip: Ipv4Addr,
 
     pub rigid_bodies: Vec<String>,
 
     #[serde(default)]
     pub consider_as_skeleton: bool,
-
-    #[serde(default)]
-    pub filters: Filters,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RobotArmConfig {
     pub ip: IpAddr,
-    #[serde(default = "default_robot_arm_port")]
+    #[serde(default = "RobotArmConfig::port")]
     pub port: u16,
-
-    #[serde(default)]
-    pub filters: Filters,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,18 +84,6 @@ pub struct DeviceConfig {
     #[serde(default)]
     pub channels: Vec<String>,
     pub transmit_rate: u16,
-
-    #[serde(default)]
-    pub filters: Filters,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Filters(pub Vec<Filter>);
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum Filter {
-    Butterworth { cutoff: f32, order: u32 },
 }
 
 /* == Default implementations == */
@@ -116,12 +97,22 @@ impl Default for PlotJugglerConfig {
     }
 }
 
-const fn default_multicast_addr() -> Ipv4Addr {
-    Ipv4Addr::new(239, 255, 42, 99)
+impl LoadCellConfig {
+    const fn update_settings() -> bool {
+        true
+    }
 }
 
-const fn default_robot_arm_port() -> u16 {
-    20000
+impl MotionCaptureConfig {
+    const fn multicast_addr() -> Ipv4Addr {
+        Ipv4Addr::new(239, 255, 42, 99)
+    }
+}
+
+impl RobotArmConfig {
+    const fn port() -> u16 {
+        20000
+    }
 }
 
 /* == Parsing == */

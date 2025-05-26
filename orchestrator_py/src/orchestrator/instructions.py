@@ -144,6 +144,11 @@ class SetOffset(Serializable):
 
 
 @dataclass
+class SetPowered(Serializable):
+    powered: bool
+
+
+@dataclass
 class SetProfile(Serializable):
     profile: Profile
 
@@ -174,6 +179,7 @@ class RobotArm(Serializable):
         | SetBlending
         | SetConfig
         | SetOffset
+        | SetPowered
         | SetProfile
         | SetReportInterval
         | WaitSettled
@@ -199,6 +205,11 @@ class WindShape(Serializable):
 
 
 @dataclass
+class BiasAll(Serializable):
+    pass
+
+
+@dataclass
 class Sleep:
     duration: float
 
@@ -218,4 +229,4 @@ class Reset(Serializable):
     pass
 
 
-Instruction = LoadCell | RobotArm | WindShape | Sleep | Reset
+Instruction = LoadCell | RobotArm | WindShape | BiasAll | Sleep | Reset

@@ -2,7 +2,7 @@ use std::{net::IpAddr, sync::Arc};
 
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::Instant};
 
 use drone_lab::{
     data::sink::{DataSink, StreamInfo},
@@ -12,8 +12,8 @@ use drone_lab::{
         example_counter::ExampleCounter,
         robot_arm::{
             RobotArm,
+            defs::Instruction as RI,
             defs::{Motion, MotionKind, Profile, ProfileLimit, ProfileScale},
-            protocol::Instruction as RI,
         },
         wind_shape::WindShape,
     },
@@ -88,13 +88,15 @@ pub async fn counter() -> Result<()> {
     }
 
     // This will not get recorded
-    null_handle.add(&[0., f32::NAN]).await;
+    let now = Instant::now();
+    null_handle.add(now, &[0., f32::NAN]).await;
 
     tracing::info!("Recording...");
     sink.start_recording().await;
 
     // This will get recorded
-    null_handle.add(&[1., f32::NAN]).await;
+    let now = Instant::now();
+    null_handle.add(now, &[1., f32::NAN]).await;
 
     sleep(1.6).await;
 

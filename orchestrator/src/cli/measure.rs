@@ -13,8 +13,8 @@ use crate::{
         HardwareContext,
         load_cell::LoadCell,
         robot_arm::{
+            defs::Instruction as RI,
             defs::{ArmConfig, Motion, MotionKind, Profile},
-            protocol::Instruction as RI,
         },
     },
     misc::data::deinterleave_data,

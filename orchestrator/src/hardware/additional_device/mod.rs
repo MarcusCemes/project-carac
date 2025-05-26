@@ -3,7 +3,7 @@ use std::{fmt, iter, mem, sync::Arc};
 use async_trait::async_trait;
 use bytes::Buf;
 use eyre::{Result, bail};
-use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle, time::Instant};
 
 use crate::{
     config::DeviceConfig,
@@ -54,6 +54,7 @@ async fn device_task(inner: Arc<Inner>) -> Result<()> {
 
     loop {
         inner.socket.recv_buf(&mut buf).await?;
+        let now = Instant::now();
 
         if let Some(ref stream) = *inner.stream.lock().await {
             let msg = parse_message(&buf[..], inner.config.channels.len())?;
@@ -62,7 +63,7 @@ async fn device_task(inner: Arc<Inner>) -> Result<()> {
                 data.clear();
                 data.extend(iter::from_fn(|| payload.try_get_f32().ok()));
 
-                stream.add(&data).await;
+                stream.add(now, &data).await;
             }
         }
 

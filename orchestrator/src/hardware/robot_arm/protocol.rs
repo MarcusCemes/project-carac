@@ -1,11 +1,7 @@
 use bytes::{Buf, BufMut};
 use eyre::eyre;
-use serde::{Deserialize, Serialize};
 
-use crate::{
-    defs::*,
-    misc::buf::{BufMutExt, Decode, DecodeError, Encode},
-};
+use crate::misc::buf::{BufMutExt, Decode, DecodeError, Encode};
 
 use super::defs::*;
 
@@ -22,20 +18,6 @@ struct Header {
 }
 
 /* === Definitions ===  */
-
-#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
-pub enum Instruction {
-    Halt(bool),
-    Hello,
-    Move(Motion),
-    ReturnHome(MotionKind),
-    SetBlending(BlendingConfig),
-    SetConfig(ArmConfig),
-    SetFrequency(f32),
-    SetProfile(Profile),
-    SetReporting(bool),
-    SetToolOffset(Point),
-}
 
 #[derive(Debug)]
 pub enum Response {
@@ -86,40 +68,45 @@ impl Encode for Instruction {
                 buf.put_bool(*return_home);
             }
 
-            Instruction::ReturnHome(motion_type) => {
+            Instruction::SetPowered(powered) => {
                 buf.put_u8(0x02);
+                buf.put_bool(*powered);
+            }
+
+            Instruction::ReturnHome(motion_type) => {
+                buf.put_u8(0x03);
                 buf.put_u8(*motion_type as u8);
             }
 
             Instruction::SetReporting(enabled) => {
-                buf.put_u8(0x03);
+                buf.put_u8(0x04);
                 buf.put_bool(*enabled);
             }
 
             Instruction::SetFrequency(interval_s) => {
-                buf.put_u8(0x04);
+                buf.put_u8(0x05);
                 buf.put_f32(*interval_s);
             }
 
             Instruction::SetConfig(config) => {
-                buf.put_u8(0x05);
+                buf.put_u8(0x06);
                 config.encode(buf);
             }
 
             Instruction::SetProfile(profile) => {
-                buf.put_u8(0x06);
+                buf.put_u8(0x07);
                 profile.encode(buf);
             }
 
             Instruction::SetBlending(blending) => {
-                buf.put_u8(0x07);
+                buf.put_u8(0x08);
                 buf.put_u8(blending.kind as u8);
                 buf.put_f32(blending.reach);
                 buf.put_f32(blending.leave);
             }
 
             Instruction::SetToolOffset(offset) => {
-                buf.put_u8(0x08);
+                buf.put_u8(0x09);
                 offset.encode(buf);
             }
 

@@ -15,7 +15,7 @@ use tokio::{
     select,
     sync::{Mutex, watch},
     task::JoinSet,
-    time::{MissedTickBehavior, interval},
+    time::{Instant, MissedTickBehavior, interval},
 };
 
 use crate::{
@@ -236,6 +236,7 @@ impl WindShape {
 
         loop {
             timer.tick().await;
+            let now = Instant::now();
 
             let set_speed = inner.state.fan_speed.load(Ordering::Relaxed);
             fan.update(set_speed, timer.period());
@@ -245,7 +246,7 @@ impl WindShape {
             if let Ok(shared) = inner.shared.try_lock() {
                 if let Some(stream) = shared.stream.as_ref() {
                     let virtual_speed = fan.0 as f32 / 100.;
-                    stream.add(&[virtual_speed]).await;
+                    stream.add(now, &[virtual_speed]).await;
                 }
             }
         }

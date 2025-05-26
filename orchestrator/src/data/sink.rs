@@ -170,7 +170,9 @@ impl DataSink {
 }
 
 impl StreamWriter {
-    pub async fn add(&self, channel_data: &[f32]) {
+    pub async fn add(&self, instant: Instant, channel_data: &[f32]) {
+        debug_assert_eq!(channel_data.len(), self.stream.channels.len());
+
         let lock = self.inner.shared.read().await;
 
         // Broadcast irrespective of recording state
@@ -182,10 +184,62 @@ impl StreamWriter {
             );
         }
 
-        // Record the data is a time reference is set
-        if let Some(time_us) = lock.elapsed_us() {
+        // Record the data if a time reference is set
+        if let Some(time_us) = lock.elapsed_us_from(instant) {
             let mut buffer_lock = lock.buffers.lock().await;
             buffer_lock[self.index].append(time_us, channel_data);
+        }
+    }
+
+    pub async fn add_many(&self, instant: Instant, frequency: f32, channel_data: &[f32]) {
+        debug_assert!(frequency > 0.);
+        debug_assert!(channel_data.len() >= self.stream.channels.len());
+        debug_assert_eq!(channel_data.len() % self.stream.channels.len(), 0);
+
+        let period = 1e6 / frequency;
+        let n_channels = self.stream.channels.len();
+        let n_samples = channel_data.len() / n_channels;
+        let duration_us = n_samples as f32 * period;
+
+        let lock = self.inner.shared.read().await;
+
+        // Send only the last sample
+        if let Some(broadcaster) = &lock.broadcaster {
+            let i = channel_data.len() - n_channels;
+
+            let _ = broadcaster.plot_juggler.send(
+                broadcaster.reference_time.elapsed().as_secs_f32(),
+                &channel_data[i..],
+                &self.stream,
+            );
+        }
+
+        // Record the data if a time reference is set
+        if let Some(time_us) = lock.elapsed_us_from(instant) {
+            let (start_us, offset, duration_us) = match time_us.checked_sub(duration_us as u32) {
+                Some(start_us) => (start_us, 0, duration_us),
+
+                // If the range exceeds the zero timestamp, trim some starting samples
+                None => {
+                    let k_samples = (time_us as f32 / period) as usize;
+                    let offset = n_samples - k_samples;
+                    let start_us = time_us - (k_samples as f32 * period) as u32;
+                    let duration_us = k_samples as f32 * period;
+
+                    (start_us, offset, duration_us)
+                }
+            };
+
+            let mut buffer_lock = lock.buffers.lock().await;
+
+            for i in offset..n_samples {
+                let start = i * n_channels;
+                let end = start + n_channels;
+                let progress = (i - offset) as f32 / (n_samples - offset) as f32;
+                let time = start_us + (duration_us * progress) as u32;
+
+                buffer_lock[self.index].append(time, &channel_data[start..end]);
+            }
         }
     }
 }
@@ -200,10 +254,10 @@ impl StreamInfo {
 }
 
 impl Shared {
-    fn elapsed_us(&self) -> Option<u32> {
-        self.reference_time.map(|instant| {
+    fn elapsed_us_from(&self, instant: Instant) -> Option<u32> {
+        self.reference_time.map(|ref_instant| {
             instant
-                .elapsed()
+                .duration_since(ref_instant)
                 .as_micros()
                 .try_into()
                 .expect("Time overflow")
@@ -237,6 +291,12 @@ impl Buffer {
                 channels.push(self.buf.get_f32_ne());
             }
         }
+
+        // Check that all timestamps are in increasing order
+        debug_assert!(
+            timestamps.windows(2).all(|w| w[0] < w[1]),
+            "Timestamps not recorded in increasing order"
+        );
 
         RecordedStream::new(timestamps, channels, self.n_channels)
     }

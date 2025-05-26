@@ -1,7 +1,11 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tokio::{sync::Mutex, task::JoinHandle, time::interval};
+use tokio::{
+    sync::Mutex,
+    task::JoinHandle,
+    time::{Instant, interval},
+};
 
 use crate::data::sink::{DataSinkBuilder, StreamWriter};
 
@@ -28,9 +32,10 @@ impl ExampleCounter {
 
         loop {
             clock.tick().await;
+            let now = Instant::now();
 
             if let Some(stream) = inner.lock().await.as_ref() {
-                stream.add(&[counter]).await;
+                stream.add(now, &[counter]).await;
             }
 
             counter += 1.;

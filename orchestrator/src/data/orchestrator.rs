@@ -84,8 +84,7 @@ impl Orchestrator {
 
     pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<()> {
         for instruction in instructions {
-            let r = self.instruction(instruction).await;
-            r?;
+            self.instruction(instruction).await?;
         }
 
         Ok(())

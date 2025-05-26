@@ -9,7 +9,7 @@ use bytes::Buf;
 use eyre::{Result, bail};
 use nalgebra::Vector3;
 use nat_net::{Message, ModelDefinitions, Request, RigidBodyData, RigidBodyDescription};
-use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle, time::Instant};
 
 use crate::{
     config::MotionCaptureConfig,
@@ -165,6 +165,7 @@ impl MotionCapture {
 
         loop {
             let message = inner.link.receive_message(&mut buf).await?;
+            let now = Instant::now();
 
             let Message::DataFrame(data_frame) = message else {
                 let id = (&buf[..]).try_get_u16_le().unwrap_or(0);
@@ -180,7 +181,7 @@ impl MotionCapture {
                 {
                     if let Some(stream) = &subscription.stream {
                         let point = Point::from(&rigid_body);
-                        stream.add(&point.array()).await;
+                        stream.add(now, &point.array()).await;
                     }
                 }
             }

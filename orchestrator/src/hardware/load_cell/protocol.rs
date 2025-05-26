@@ -38,23 +38,23 @@ pub struct Message {
 #[derive(Deserialize)]
 pub struct NetFtApi2 {
     #[serde(rename = "scfgfu")]
-    force_unit: String,
+    pub force_unit: String,
     #[serde(rename = "scfgtu")]
-    torque_unit: String,
+    pub torque_unit: String,
     #[serde(rename = "cfgcpf")]
-    force_counts: u32,
+    pub force_counts: u32,
     #[serde(rename = "cfgcpt")]
-    torque_counts: u32,
+    pub torque_counts: u32,
     #[serde(rename = "setuserfilter")]
-    low_pass_filter: u8,
+    pub low_pass_filter: u8,
     #[serde(rename = "comrdtrate")]
-    output_rate: u32,
+    pub output_rate: u32,
     #[serde(rename = "runrate")]
-    internal_rate: u32,
+    pub internal_rate: u32,
     #[serde(rename = "cfgtfx")]
-    tool_transform: [f32; 6],
+    pub tool_transform: [f32; 6],
     #[serde(rename = "comrdtbsiz")]
-    buffered_size: u8,
+    pub buffered_size: u8,
 }
 
 /* === Implementations === */
@@ -70,14 +70,31 @@ impl Link {
         Self { socket }
     }
 
-    pub async fn receive_load(&self, buf: &mut Vec<u8>, config: &NetFtApi2) -> Result<Load> {
+    pub async fn receive_loads(
+        &self,
+        buf: &mut Vec<u8>,
+        output: &mut Vec<f32>,
+        config: &NetFtApi2,
+    ) -> Result<usize> {
         buf.clear();
+        output.clear();
 
         self.socket.recv_buf(buf).await?;
 
-        let message = Message::decode(&mut &buf[..])?;
+        let buf = &mut &buf[..];
+        let mut count = 0;
 
-        Ok(message.load(config.force_counts, config.torque_counts))
+        while buf.has_remaining() {
+            let message = Message::decode(&mut &buf[..])?;
+            let mut load = message.load(config.force_counts, config.torque_counts);
+
+            Self::fix_orientation(&mut load);
+
+            output.extend_from_slice(&load.array());
+            count += 1;
+        }
+
+        Ok(count)
     }
 
     pub async fn send_instruction(&self, instruction: Instruction) -> io::Result<()> {
@@ -100,6 +117,35 @@ impl Link {
         config.validate();
 
         Ok(config)
+    }
+
+    pub async fn set_variables<'a, I>(&self, page: &str, values: I) -> Result<()>
+    where
+        I: Iterator<Item = &'a (&'a str, &'a str)>,
+    {
+        let ip = self.socket.peer_addr()?.ip();
+        let mut url = format!("http://{ip}/{page}.cgi?");
+
+        for (i, (key, value)) in values.enumerate() {
+            if i > 0 {
+                url.push('&');
+            }
+
+            url.push_str(&format!("{key}={value}"));
+        }
+
+        reqwest::get(&url)
+            .await
+            .wrap_err("Failed to set variables")?;
+
+        Ok(())
+    }
+
+    /// The datasheet specifies the X axis point towards the back of the device on the tool
+    /// side. This function swaps the X and Y axes of the force and moment vectors.
+    fn fix_orientation(load: &mut Load) {
+        (load.force.x, load.force.y) = (load.force.y, -load.force.x);
+        (load.moment.x, load.moment.y) = (load.moment.y, -load.moment.x);
     }
 }
 

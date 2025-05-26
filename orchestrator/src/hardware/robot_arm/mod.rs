@@ -13,7 +13,7 @@ use tokio::{
     select,
     sync::{Mutex, oneshot, watch},
     task::JoinHandle,
-    time::timeout,
+    time::{Instant, timeout},
 };
 
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
 use self::{defs::*, protocol::*};
 
 pub mod defs;
-pub mod protocol;
+mod protocol;
 
 /* === Definitions === */
 
@@ -168,6 +168,7 @@ impl RobotArm {
             buf.clear();
 
             inner.socket.recv_buf(&mut buf).await?;
+            let now = Instant::now();
 
             match Response::decode(&mut &buf[..])? {
                 Response::Ack(id) => {
@@ -189,7 +190,7 @@ impl RobotArm {
 
                 Response::State(state) => {
                     if let Some(stream) = &inner.shared.lock().await.stream {
-                        stream.add(&state.position.array()).await;
+                        stream.add(now, &state.position.array()).await;
                     }
 
                     inner.state.send_replace(Some(state));

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use defs::Command;
 use eyre::Result;
 use protocol::{Instruction, Link, NetFtApi2};
-use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle, time::Instant};
 
 use crate::{
     config::LoadCellConfig,
@@ -65,7 +65,52 @@ impl LoadCell {
     }
 
     pub async fn try_new_from_config(config: &LoadCellConfig) -> Result<Self> {
-        Self::try_new(config.ip).await
+        let load_cell = Self::try_new(config.ip).await?;
+
+        if config.update_settings {
+            load_cell.update_settings().await?;
+        }
+
+        Ok(load_cell)
+    }
+
+    pub async fn update_settings(&self) -> Result<()> {
+        tracing::info!("Updating load cell settings...");
+
+        for (page, variables) in [
+            ("setting", [("setuserfilter", "0")].as_slice()),
+            (
+                "config",
+                [
+                    ("cfgtfx0", "0"),
+                    ("cfgtfx1", "0"),
+                    ("cfgtfx2", "0"),
+                    ("cfgtfx3", "0"),
+                    ("cfgtfx4", "0"),
+                    ("cfgtfx5", "0"),
+                ]
+                .as_slice(),
+            ),
+            (
+                "config",
+                [
+                    ("cfgtfx0", "0"),
+                    ("cfgtfx1", "0"),
+                    ("cfgtfx2", "0"),
+                    ("cfgtfx3", "0"),
+                    ("cfgtfx4", "0"),
+                    ("cfgtfx5", "0"),
+                ]
+                .as_slice(),
+            ),
+        ] {
+            self.inner
+                .link
+                .set_variables(page, variables.iter())
+                .await?;
+        }
+
+        Ok(())
     }
 
     pub async fn command(&self, command: Command) -> Result<()> {
@@ -82,16 +127,23 @@ impl LoadCell {
 
     async fn load_cell_task(inner: Arc<Inner>) -> Result<()> {
         let mut buf = Vec::new();
+        let mut channel_data = Vec::new();
 
         loop {
-            let load = inner.link.receive_load(&mut buf, &inner.config).await?;
+            inner
+                .link
+                .receive_loads(&mut buf, &mut channel_data, &inner.config)
+                .await?;
+
+            let now = Instant::now();
+
             let lock = inner.shared.lock().await;
 
             if let Some(stream) = &lock.stream {
-                stream.add(&load.array()).await;
+                stream
+                    .add_many(now, inner.config.output_rate as f32, &channel_data)
+                    .await;
             }
-
-            buf.clear();
         }
     }
 }
@@ -111,7 +163,7 @@ impl HardwareAgent for LoadCell {
     }
 
     async fn start(&mut self) {
-        let _ = self.inner.instruction(Instruction::StartStreaming).await;
+        let _ = self.inner.instruction(Instruction::StartBuffered).await;
     }
 
     async fn stop(&mut self) {

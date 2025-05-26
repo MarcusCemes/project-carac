@@ -8,8 +8,6 @@ use crate::{
     misc::buf::{BufExt, Decode, DecodeError, Encode},
 };
 
-use super::protocol::Instruction;
-
 /* == ArmConfig == */
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -54,6 +52,21 @@ pub enum Command {
     WaitSettled,
     SetOrigin(Point),
     Remote(Instruction),
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub enum Instruction {
+    Halt(bool),
+    Hello,
+    Move(Motion),
+    ReturnHome(MotionKind),
+    SetBlending(BlendingConfig),
+    SetConfig(ArmConfig),
+    SetFrequency(f32),
+    SetPowered(bool),
+    SetProfile(Profile),
+    SetReporting(bool),
+    SetToolOffset(Point),
 }
 
 /* == Motion == */
