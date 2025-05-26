@@ -5,7 +5,6 @@ mod convert;
 mod export;
 mod measure;
 mod plot;
-mod run;
 mod server;
 mod view;
 
@@ -23,11 +22,6 @@ pub enum Command {
     Measure(measure::MeasureOpts),
     Plot(plot::PlotOpts),
     View(view::ViewOpts),
-
-    Run {
-        #[arg(short, long, default_value = "config.yaml")]
-        config: String,
-    },
 
     Server {
         #[arg(short, long, default_value = "config.yaml")]
@@ -56,7 +50,6 @@ pub async fn execute_command(command: Command) -> Result<()> {
         Command::Export(opts) => export::export(opts).await,
         Command::Measure(opts) => measure::Measure::run(opts).await,
         Command::Plot(opts) => plot::plot(opts).await,
-        Command::Run { config } => run::launch(&config).await,
         Command::Server { config, port } => server::launch(&config, port).await,
         Command::View(opts) => view::view(opts).await,
     }

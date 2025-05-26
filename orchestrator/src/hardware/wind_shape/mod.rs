@@ -1,6 +1,6 @@
 use std::{
-    fmt, iter,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    fmt,
+    net::IpAddr,
     str,
     sync::{
         Arc,
@@ -10,11 +10,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use eyre::{Context, Result, eyre};
-use serde::{Deserialize, Serialize};
+use eyre::Result;
 use tokio::{
-    io,
-    net::UdpSocket,
     select,
     sync::{Mutex, watch},
     task::JoinSet,
@@ -24,153 +21,122 @@ use tokio::{
 use crate::{
     config::WindShapeConfig,
     data::sink::{DataSinkBuilder, StreamWriter},
+    hardware::HardwareAgent,
 };
 
-use super::HardwareAgent;
+use self::{defs::*, protocol::*};
 
-const MODULE_COUNT: usize = 56;
-const MODULE_FANS: usize = 18;
-
-const LOCAL_PORT: u16 = 60333;
-const REMOTE_PORT: u16 = 60334;
-
-const NAME: &str = "wind_shape";
-
-const STATUS_INTERVAL: Duration = Duration::from_millis(40);
-const RX_BUFFER_SIZE: usize = 65536;
+pub mod defs;
+pub mod protocol;
 
 pub struct WindShape {
     inner: Arc<Inner>,
 
-    client_id: u8,
-    link: Link,
-
     request_control: watch::Sender<bool>,
     status: watch::Receiver<Status>,
 
-    tasks: JoinSet<()>,
+    tasks: JoinSet<Result<()>>,
 }
 
-#[derive(Default)]
 pub struct Inner {
-    enable_power: AtomicBool,
-    fan_speed: AtomicU8,
-    stream: Mutex<Option<StreamWriter>>,
-}
-
-#[derive(Clone)]
-struct Link {
-    addr: SocketAddr,
-    socket: Arc<UdpSocket>,
+    client_id: u8,
+    link: Link,
+    shared: Mutex<Shared>,
+    state: State,
+    virtual_speed: watch::Sender<u8>,
 }
 
 #[derive(Default)]
-struct Status {
-    in_control: bool,
+pub struct State {
+    fan_speed: AtomicU8,
+    powered: AtomicBool,
 }
 
-enum Request {
-    InitiateConnection,
-    Module { enable_power: bool, fan_speed: u8 },
-    Status { request_control: bool },
-}
-
-struct Response {
-    client_id: u8,
-    payload: ResponsePayload,
-}
-
-enum ResponsePayload {
-    Address,
-    Module,
-    Status { in_control: bool },
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum WindShapeInstruction {
-    EnablePower(bool),
-    SetWindSpeed(u8),
+#[derive(Default)]
+pub struct Shared {
+    stream: Option<StreamWriter>,
 }
 
 impl WindShape {
     pub const NAME: &str = "wind_shape";
     pub const CHANNELS: [&str; 1] = ["fan_speed"];
 
-    pub const STREAM_INTERVAL: Duration = Duration::from_millis(250);
+    const LOCAL_PORT: u16 = 60333;
+    const REMOTE_PORT: u16 = 60334;
+
+    const MODULE_COUNT: usize = 56;
+    const MODULE_FANS: usize = 18;
+
+    const STATUS_INTERVAL: Duration = Duration::from_millis(40);
+    const STREAM_INTERVAL: Duration = Duration::from_millis(250);
 
     pub async fn connect_from_config(config: &WindShapeConfig) -> Result<Self> {
         Self::connect(config.ip).await
     }
 
     pub async fn connect(ip: IpAddr) -> Result<WindShape> {
-        let link = Link::connect(ip).await;
+        let link = Link::try_new(ip, Self::REMOTE_PORT, Self::LOCAL_PORT).await?;
 
-        tracing::debug!("Handshaking with WindShape...");
+        let client_id = link.handshake().await?;
 
-        link.send_request(Request::InitiateConnection, 0).await?;
-        let client_id = link.recv_handshake().await?;
+        let inner = Arc::new(Inner::new(client_id, link));
 
-        tracing::info!("Handshake successful!");
-
-        let inner = Arc::new(Inner::default());
-
-        // Spawn background tasks to send and receive status messages
-        let (status, request_control, task_handle) =
-            Self::spawn_tasks(inner.clone(), client_id, link.clone());
+        let (status, request_control, tasks) = Self::spawn_tasks(inner.clone());
 
         Ok(WindShape {
             inner,
 
-            client_id,
-            link,
-
             request_control,
 
             status,
-            tasks: task_handle,
+            tasks,
         })
     }
 
     /* == Public API == */
 
-    pub async fn execute(&mut self, instruction: WindShapeInstruction) -> Result<()> {
-        match instruction {
-            WindShapeInstruction::EnablePower(true) => self.enable_power().await,
-            WindShapeInstruction::EnablePower(false) => self.disable_power().await,
-            WindShapeInstruction::SetWindSpeed(speed) => self.set_fan_speed(speed).await,
+    pub async fn command(&self, command: Command) -> Result<()> {
+        match command {
+            Command::SetFanSpeed(speed) => self.set_fan_speed(speed).await,
+            Command::SetPowered(powered) => self.set_powered(powered).await,
+            Command::WaitSettled => self.wait_settled().await,
         }
     }
+
     pub async fn request_control(&mut self) {
-        self.update_control(true).await
+        self.set_in_control(true).await
     }
 
     pub async fn release_control(&mut self) {
-        self.update_control(false).await
+        self.set_in_control(false).await
     }
 
-    pub async fn enable_power(&mut self) -> Result<()> {
-        self.inner.enable_power.store(true, Ordering::Relaxed);
+    pub async fn set_powered(&self, powered: bool) -> Result<()> {
+        self.inner.state.powered.store(powered, Ordering::Relaxed);
         self.send_module_state().await
     }
 
-    pub async fn disable_power(&mut self) -> Result<()> {
-        self.inner.enable_power.store(false, Ordering::Relaxed);
-        self.inner.fan_speed.store(0, Ordering::Relaxed);
+    pub async fn set_fan_speed(&self, fan_speed: f32) -> Result<()> {
+        let fan_speed = (100. * fan_speed).round().clamp(0., 100.) as u8;
+
+        self.inner
+            .state
+            .fan_speed
+            .store(fan_speed, Ordering::Relaxed);
+
         self.send_module_state().await
     }
 
-    pub async fn set_fan_speed(&mut self, fan_speed: u8) -> Result<()> {
-        self.inner.fan_speed.store(fan_speed, Ordering::Relaxed);
-        self.send_module_state().await
-    }
-
-    async fn update_control(&mut self, value: bool) {
+    async fn set_in_control(&mut self, value: bool) {
         self.request_control
             .send(value)
-            .expect("WindShape sender died");
+            .expect("WindShape control task died");
 
         loop {
-            self.status.changed().await.expect("Status receiver died");
+            self.status
+                .changed()
+                .await
+                .expect("WindShape receiver task died");
 
             if self.status.borrow().in_control == value {
                 break;
@@ -178,64 +144,56 @@ impl WindShape {
         }
     }
 
-    /* == Socket == */
+    async fn wait_settled(&self) -> Result<()> {
+        let mut channel = self.inner.virtual_speed.subscribe();
+
+        loop {
+            channel.changed().await?;
+
+            let set_speed = self.inner.state.fan_speed.load(Ordering::Relaxed);
+            let virtual_speed = channel.borrow_and_update();
+
+            if set_speed == *virtual_speed {
+                return Ok(());
+            }
+        }
+    }
 
     async fn send_module_state(&self) -> Result<()> {
-        let enable_power = self.inner.enable_power.load(Ordering::Relaxed);
-        let fan_speed = self.inner.fan_speed.load(Ordering::Relaxed);
+        let fan_speed = self.inner.state.fan_speed.load(Ordering::Relaxed);
+        let powered = self.inner.state.powered.load(Ordering::Relaxed);
 
-        let request = Request::Module {
-            enable_power,
-            fan_speed,
-        };
+        let request = Request::new(
+            self.inner.client_id,
+            Instruction::Module { powered, fan_speed },
+        );
 
-        self.link
-            .send_request(request, self.client_id)
-            .await
-            .wrap_err("Failed to send module state")
+        self.inner.link.send_request(request).await
     }
 
     /* == Background tasks == */
 
     fn spawn_tasks(
         inner: Arc<Inner>,
-        client_id: u8,
-        socket: Link,
-    ) -> (watch::Receiver<Status>, watch::Sender<bool>, JoinSet<()>) {
+    ) -> (
+        watch::Receiver<Status>,
+        watch::Sender<bool>,
+        JoinSet<Result<()>>,
+    ) {
         let (status_tx, status_rx) = watch::channel(Status::default());
         let (state_tx, state_rx) = watch::channel(false);
 
-        let stream_task = Self::stream_task(inner.clone());
-        let sender_task = Self::send_status(client_id, socket.clone(), state_rx);
-        let receiver_task = Self::receive_status(client_id, socket, status_tx);
-
         let mut set = JoinSet::new();
-        set.spawn(stream_task);
-        set.spawn(sender_task);
-        set.spawn(receiver_task);
+
+        set.spawn(Self::control_task(inner.clone(), state_rx));
+        set.spawn(Self::receiver_task(inner.clone(), status_tx));
+        set.spawn(Self::stream_task(inner));
 
         (status_rx, state_tx, set)
     }
 
-    async fn stream_task(inner: Arc<Inner>) {
-        let mut timer = interval(Self::STREAM_INTERVAL);
-
-        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        loop {
-            timer.tick().await;
-
-            if let Ok(maybe_stream) = inner.stream.try_lock() {
-                if let Some(stream) = maybe_stream.as_ref() {
-                    let fan_speed = inner.fan_speed.load(Ordering::Relaxed);
-                    stream.add(&[fan_speed as f32]).await;
-                }
-            }
-        }
-    }
-
-    async fn send_status(client_id: u8, socket: Link, mut control: watch::Receiver<bool>) {
-        let mut timer = interval(STATUS_INTERVAL);
+    async fn control_task(inner: Arc<Inner>, mut control: watch::Receiver<bool>) -> Result<()> {
+        let mut timer = interval(Self::STATUS_INTERVAL);
 
         timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -248,36 +206,46 @@ impl WindShape {
 
             // Send a status message to the device
             let request_control = *control.borrow();
-            let request = Request::Status { request_control };
+            let request = Request::new(inner.client_id, Instruction::Status { request_control });
 
-            if socket.send_request(request, client_id).await.is_err() {
-                break;
+            inner.link.send_request(request).await?;
+        }
+    }
+
+    async fn receiver_task(inner: Arc<Inner>, status: watch::Sender<Status>) -> Result<()> {
+        let mut buf = Vec::with_capacity(Link::RX_BUFFER_SIZE);
+
+        loop {
+            let response = inner.link.receive_response(&mut buf).await?;
+
+            if response.client_id != inner.client_id {
+                continue;
+            }
+
+            if let ResponsePayload::Status(Status { in_control }) = response.payload {
+                status.send_modify(|s| s.in_control = in_control);
             }
         }
     }
 
-    async fn receive_status(client_id: u8, socket: Link, status: watch::Sender<Status>) {
-        let mut buffer = vec![0u8; RX_BUFFER_SIZE];
+    async fn stream_task(inner: Arc<Inner>) -> Result<()> {
+        let mut fan = VirtualFan::new();
+        let mut timer = interval(Self::STREAM_INTERVAL);
+
+        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
-            let (size, _) = socket
-                .socket
-                .recv_from(&mut buffer)
-                .await
-                .expect("Error reading from socket");
+            timer.tick().await;
 
-            if let Some(response) = Response::parse_bytes(&buffer[..size]) {
-                if response.client_id != client_id {
-                    tracing::warn!(
-                        "Received message from unknown client ID: {}",
-                        response.client_id
-                    );
+            let set_speed = inner.state.fan_speed.load(Ordering::Relaxed);
+            fan.update(set_speed, timer.period());
 
-                    continue;
-                }
+            let _ = inner.virtual_speed.send_replace(fan.0);
 
-                if let ResponsePayload::Status { in_control } = response.payload {
-                    status.send_modify(|s| s.in_control = in_control);
+            if let Ok(shared) = inner.shared.try_lock() {
+                if let Some(stream) = shared.stream.as_ref() {
+                    let virtual_speed = fan.0 as f32 / 100.;
+                    stream.add(&[virtual_speed]).await;
                 }
             }
         }
@@ -286,7 +254,7 @@ impl WindShape {
 
 impl fmt::Display for WindShape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{NAME}")
+        write!(f, "{}", Self::NAME)
     }
 }
 
@@ -298,7 +266,7 @@ impl HardwareAgent for WindShape {
 
         let stream = sink.register_stream(name, channels).await;
 
-        *self.inner.stream.lock().await = Some(stream);
+        self.inner.shared.lock().await.stream = Some(stream);
     }
 
     async fn start(&mut self) {
@@ -316,96 +284,66 @@ impl Drop for WindShape {
     }
 }
 
-impl Link {
-    async fn connect(addr: IpAddr) -> Self {
-        let addr = SocketAddr::new(addr, REMOTE_PORT);
-
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, LOCAL_PORT))
-            .await
-            .unwrap()
-            .into();
-
-        Link { addr, socket }
-    }
-
-    async fn send_request(&self, request: Request, client_id: u8) -> io::Result<()> {
-        let (tag, payload) = request.pack();
-        let message = format!("{tag}@{client_id}:{payload}\0");
-
-        self.socket.send_to(message.as_bytes(), self.addr).await?;
-
-        Ok(())
-    }
-
-    async fn recv_response(&self) -> Result<Response> {
-        let mut buffer = vec![0u8; RX_BUFFER_SIZE];
-        let (size, _) = self.socket.recv_from(&mut buffer).await?;
-        Response::parse_bytes(&buffer[..size]).ok_or(eyre!("Invalid response"))
-    }
-
-    async fn recv_handshake(&self) -> Result<u8> {
-        loop {
-            let response = self.recv_response().await?;
-
-            if let ResponsePayload::Address = response.payload {
-                return Ok(response.client_id);
-            }
+impl Inner {
+    pub fn new(client_id: u8, link: Link) -> Self {
+        Inner {
+            client_id,
+            link,
+            shared: Mutex::default(),
+            state: State::default(),
+            virtual_speed: watch::channel(0).0,
         }
     }
 }
 
-impl Request {
-    fn pack(&self) -> (&'static str, String) {
-        match self {
-            Request::Module {
-                enable_power,
-                fan_speed,
-            } => {
-                let fan_speed = (*fan_speed).min(100).to_string();
-                let enable_power = *enable_power as u8;
+/* == Miscellaneous == */
 
-                let fan_power_str = iter::repeat_n(fan_speed, MODULE_FANS)
-                    .collect::<Vec<_>>()
-                    .join(",");
+#[derive(Clone, Debug, Default)]
+struct VirtualFan(u8);
 
-                let modules_str = (0..MODULE_COUNT)
-                    .map(|i| format!("{};{};{};0;0;0", i + 1, fan_power_str, enable_power))
-                    .collect::<Vec<_>>()
-                    .join("|");
+impl VirtualFan {
+    const FAN_CHANGE_RATE: u8 = 5;
 
-                ("MODULE", modules_str)
-            }
+    pub fn new() -> Self {
+        VirtualFan::default()
+    }
 
-            Request::InitiateConnection => ("REQUEST_CONNECTION", "no_message".to_string()),
+    pub fn update(&mut self, target: u8, delta: Duration) -> u8 {
+        let delta = (delta.as_secs_f32() * Self::FAN_CHANGE_RATE as f32).round() as u8;
 
-            Request::Status { request_control } => {
-                ("STATUS", format!("{};0", *request_control as u8))
-            }
-        }
+        self.0 = (self.0)
+            .saturating_add(if target > self.0 { delta } else { 0 })
+            .saturating_sub(if target < self.0 { delta } else { 0 })
+            .clamp(0, 100);
+
+        self.0
     }
 }
 
-impl Response {
-    fn parse_bytes(buffer: &[u8]) -> Option<Self> {
-        let input = str::from_utf8(buffer).ok()?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let (header, payload) = input.split_once(':')?;
-        let (tag, client_id_str) = header.split_once('@')?;
-        let client_id = client_id_str.parse().ok()?;
+    #[test]
+    fn test_virtual_fan() {
+        let mut fan = VirtualFan::new();
 
-        let payload = match tag {
-            "ADDRESS" => ResponsePayload::Address,
-            "MODULE" => ResponsePayload::Module,
+        let delta = Duration::from_secs(1);
 
-            "STATUS" => {
-                let in_control_str = payload.split(';').next()?;
-                let in_control = in_control_str.parse::<u8>().ok()? == 1;
-                ResponsePayload::Status { in_control }
-            }
+        let sequence = [
+            (0, 0),
+            (50, 5),
+            (100, 10),
+            (50, 15),
+            (0, 10),
+            (0, 5),
+            (0, 0),
+            (0, 0),
+        ];
 
-            _ => return None,
-        };
-
-        Some(Response { client_id, payload })
+        for (target, expected) in sequence {
+            let result = fan.update(target, delta);
+            assert_eq!(result, expected);
+        }
     }
 }

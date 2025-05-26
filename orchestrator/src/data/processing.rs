@@ -252,6 +252,7 @@ pub struct StreamFilter {
 
 impl StreamFilter {
     pub const ORDER: usize = 1;
+    pub const MIN_SAMPLES: usize = 16;
 
     pub fn new(cutoff_frequency: f64) -> Self {
         Self { cutoff_frequency }
@@ -260,8 +261,8 @@ impl StreamFilter {
     pub fn apply(&self, stream: &mut RecordedStream) -> Result<()> {
         let n_samples = stream.timestamps.len();
 
-        if n_samples == 0 {
-            tracing::warn!("Stream empty, not filtering!");
+        if n_samples < Self::MIN_SAMPLES {
+            tracing::debug!("Not enough samples to filter safely, skipping");
             return Ok(());
         }
 

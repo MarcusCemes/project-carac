@@ -27,7 +27,7 @@ pub fn init() -> Result<()> {
     color_eyre::install()?;
 
     let env_filter = EnvFilter::builder()
-        .with_default_directive("drone_lab=debug".parse()?)
+        .with_default_directive("drone_lab=info".parse()?)
         .from_env_lossy();
 
     tracing_subscriber::fmt()

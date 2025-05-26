@@ -6,15 +6,31 @@ use tokio::task::JoinSet;
 
 use drone_lab::{
     data::sink::{DataSink, StreamInfo},
-    defs::PoseEuler,
+    defs::Point,
     hardware::{
         HardwareAgent,
         example_counter::ExampleCounter,
-        robot_arm::{Motion, MotionDiscriminants, RobotArm, SpeedProfile},
+        robot_arm::{
+            RobotArm,
+            defs::{Motion, MotionKind, Profile, ProfileLimit, ProfileScale},
+            protocol::Instruction as RI,
+        },
         wind_shape::WindShape,
     },
     misc::{plot_juggler::PlotJugglerBroadcaster, sleep},
 };
+
+macro_rules! movel {
+    ($robot:expr, $point:expr) => {
+        $robot.instruction(RI::Move(Motion::Linear($point))).await?;
+    };
+}
+
+macro_rules! settle {
+    ($robot:expr) => {
+        $robot.try_wait_settled().await?;
+    };
+}
 
 #[derive(Parser)]
 struct Opts {
@@ -85,13 +101,6 @@ pub async fn counter() -> Result<()> {
     tracing::info!("Stopping recording...");
     let _run = sink.stop_recording().await;
 
-    // let experiment = Experiment::new(
-    //     ExperimentMetadata::new(Some("Test Run".to_string()), sink.streams().await),
-    //     vec![run],
-    // );
-
-    // experiment.write(&mut io::stdout()).await?;
-
     Ok(())
 }
 
@@ -132,11 +141,6 @@ async fn plot_juggler_task(
         let t = 1e-2 * (time as f32) + stream_id_f32;
         let v = t.sin() / stream_id_f32;
 
-        // let data = RunSample {
-        //     channel_data: &[v],
-        //     delta_us: (1e5 * t) as u32,
-        // };
-
         plot.send(t, &[v], &streams[stream_id])?;
 
         sleep(0.1).await;
@@ -159,95 +163,78 @@ struct RobotArmOpts {
 async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     tracing::info!("Connecting to robot arm");
 
-    let mut robot_arm = RobotArm::connect(opts.ip, opts.port)
+    let mut robot = RobotArm::try_new(opts.ip, opts.port)
         .await
         .wrap_err("Failed to connect to RobotArm")?;
 
-    robot_arm.start().await;
+    robot.start().await;
 
-    let r = robot_arm.controller();
+    let mut point = Point::position(500., 100., 400.);
+    let mut offset = Point::position(660., 20., 0.);
 
-    let mut point = PoseEuler {
-        x: 500.,
-        y: 100.,
-        z: 400.,
-        ..Default::default()
-    };
+    let mut profile = Profile::builder().with_smoothing(20).build();
 
-    let mut offset = PoseEuler {
-        x: 660.,
-        z: 20.,
-        ..Default::default()
-    };
+    robot.instruction(RI::SetToolOffset(offset)).await?;
+    robot.instruction(RI::SetProfile(profile)).await?;
+    movel!(robot, point);
+    settle!(robot);
 
-    let mut profile = SpeedProfile {
-        rotation_limit: 10000.,
-        translation_limit: 10000.,
-        acceleration_scale: 20,
-        deceleration_scale: 20,
-        velocity_scale: 100,
-    };
+    point.position.x = 1200.;
+    movel!(robot, point);
+    settle!(robot);
 
-    r.set_offset(offset).await?;
-    r.set_profile(profile).await?;
+    offset.position.z = 100.;
+    profile.scale = ProfileScale::default();
 
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    robot.instruction(RI::SetToolOffset(offset)).await?;
+    robot.instruction(RI::SetProfile(profile)).await?;
 
-    point.x = 1200.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    movel!(robot, point);
+    settle!(robot);
 
-    offset.z = 100.;
-    profile.acceleration_scale = 100;
-    profile.deceleration_scale = 100;
+    point.orientation.x = 90.;
+    movel!(robot, point);
+    settle!(robot);
 
-    r.set_offset(offset).await?;
-    r.set_profile(profile).await?;
+    point.orientation.x = -90.;
+    movel!(robot, point);
+    settle!(robot);
 
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    point.orientation.x = 0.;
+    movel!(robot, point);
+    settle!(robot);
 
-    point.rx = 90.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    offset.position.z = 0.;
+    robot.instruction(RI::SetToolOffset(offset)).await?;
 
-    point.rx = -90.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    point.position.x = 500.;
+    point.position.x = 500.;
+    point.position.z = 450.;
+    movel!(robot, point);
+    settle!(robot);
 
-    point.rx = 0.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    profile.scale.acceleration = 15;
+    profile.scale.deceleration = 15;
+    profile.limit.rotation = 30.;
+    robot.instruction(RI::SetProfile(profile)).await?;
 
-    offset.z = 0.;
-    r.set_offset(offset).await?;
+    point.orientation.z = -45.;
+    movel!(robot, point);
+    settle!(robot);
 
-    point.x = 500.;
-    point.z = 450.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    point.orientation.z = 20.;
+    movel!(robot, point);
+    settle!(robot);
 
-    profile.acceleration_scale = 15;
-    profile.deceleration_scale = 15;
-    profile.rotation_limit = 30.;
-    r.set_profile(profile).await?;
+    profile.limit = ProfileLimit::default();
 
-    point.rz = -45.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    robot
+        .instruction(RI::ReturnHome(MotionKind::Direct))
+        .await?;
 
-    point.rz = 20.;
-    r.move_to(Motion::Linear(point)).await?;
-    r.wait_settled().await?;
+    settle!(robot);
 
-    profile.rotation_limit = 10000.;
-    profile.translation_limit = 10000.;
-
-    r.go_home(MotionDiscriminants::Direct).await?;
-    r.wait_settled().await?;
-
-    robot_arm.stop().await;
+    robot.stop().await;
 
     Ok(())
 }
@@ -261,28 +248,26 @@ struct WindShapeOpts {
 }
 
 async fn wind_shape(opts: WindShapeOpts) -> Result<()> {
-    let mut wind_shape = WindShape::connect(opts.ip)
-        .await
-        .expect("Failed to connect to WindShape");
+    let mut wind_shape = WindShape::connect(opts.ip).await?;
 
     wind_shape.request_control().await;
 
-    wind_shape.enable_power().await?;
+    wind_shape.set_powered(true).await?;
     sleep(1.).await;
 
-    wind_shape.set_fan_speed(10).await?;
+    wind_shape.set_fan_speed(0.1).await?;
     sleep(3.).await;
 
-    wind_shape.set_fan_speed(15).await?;
+    wind_shape.set_fan_speed(0.15).await?;
     sleep(1.).await;
 
-    wind_shape.set_fan_speed(20).await?;
+    wind_shape.set_fan_speed(0.2).await?;
     sleep(1.).await;
 
-    wind_shape.set_fan_speed(5).await?;
+    wind_shape.set_fan_speed(0.05).await?;
     sleep(1.).await;
 
-    wind_shape.disable_power().await?;
+    wind_shape.set_powered(false).await?;
     wind_shape.release_control().await;
 
     Ok(())

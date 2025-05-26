@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="decodeBlend">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="value" type="mdesc" xsi:type="element" use="reference" />
+      <Parameter name="buffer" type="num" xsi:type="array" use="reference" />
+    </Parameters>
+    <Locals>
+      <Local name="decodeBuffer" type="num" xsi:type="array" size="2" />
+    </Locals>
+    <Code><![CDATA[begin
+  if buffer[0] == 0
+    value.blend = off
+  elseIf buffer[0] == 1
+    value.blend = joint
+  elseIf buffer[0] == 2
+    value.blend = Cartesian
+  endIf
+
+  fromBinary(buffer[1], 8, "4.0b", decodeBuffer)
+
+  value.leave = decodeBuffer[0]
+  value.reach = decodeBuffer[1]
+
+  logMsg("B: (" + toString("", value.blend) + ", " + toString("", value.leave) + ", " + toString("", value.reach) + ")")
+end
+]]></Code>
+  </Program>
+</Programs>

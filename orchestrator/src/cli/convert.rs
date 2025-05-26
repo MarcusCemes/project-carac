@@ -8,7 +8,7 @@ use clap::{Parser, ValueEnum};
 use eyre::{ContextCompat, Result, eyre};
 use polars::prelude::*;
 
-use crate::data::{experiment::Experiment, session::SessionMetadata};
+use crate::data::{experiment::Experiment, processing::StreamFilter, session::SessionMetadata};
 
 const DEFAULT_DIVISIONS: u32 = 100;
 
@@ -26,6 +26,9 @@ pub struct ConvertOpts {
     pub divisions: u32,
 
     #[clap(short, long)]
+    cutoff_frequency: Option<f32>,
+
+    #[clap(short, long)]
     pub output: Option<PathBuf>,
 }
 
@@ -38,14 +41,22 @@ pub enum OutputFormat {
 
 pub async fn segment(opts: ConvertOpts) -> Result<()> {
     let maybe_metadata = SessionMetadata::find(&opts.path).await;
-    let experiment = Experiment::load(&opts.path).await?;
+    let mut experiment = Experiment::load(&opts.path).await?;
+
+    let metadata = maybe_metadata.unwrap_or_else(|| experiment.guess_metadata());
 
     let run = experiment
         .runs
-        .get(opts.run as usize)
+        .get_mut(opts.run as usize)
         .wrap_err_with(|| eyre!("Run {} not found", opts.run))?;
 
-    let metadata = maybe_metadata.unwrap_or_else(|| experiment.guess_metadata());
+    if let Some(cutoff_frequency) = opts.cutoff_frequency {
+        let filter = StreamFilter::new(cutoff_frequency as f64);
+
+        for stream in &mut run.recorded_streams {
+            let _ = filter.apply(stream);
+        }
+    }
 
     let mut df = run.dataframe(&metadata.streams, opts.divisions)?;
     let mut output = get_output(opts.clone())?;

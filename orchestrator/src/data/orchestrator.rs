@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use eyre::{ContextCompat, Result, bail};
+use eyre::{ContextCompat, Result, eyre};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
@@ -9,11 +9,13 @@ use crate::{
     config::Config,
     data::{experiment::Run, session::Session, sink::DataSink},
     hardware::{
-        HardwareAgent, HardwareContext, load_cell::LoadCellInstruction,
-        robot_arm::RobotArmInstruction, wind_shape::WindShapeInstruction,
+        HardwareAgent, HardwareContext, load_cell::defs::Command as LoadCommand,
+        robot_arm::defs::Command as RobotCommand, wind_shape::defs::Command as WindCommand,
     },
     misc::{plot_juggler::PlotJugglerBroadcaster, type_name},
 };
+
+/* === Definitions === */
 
 pub struct Orchestrator {
     audio: Option<AudioPlayer>,
@@ -22,8 +24,20 @@ pub struct Orchestrator {
     sink: DataSink,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum Instruction {
+    LoadCell(LoadCommand),
+    Robot(RobotCommand),
+    Wind(WindCommand),
+    BiasAll,
+    Sleep(Duration),
+    Reset,
+}
+
+/* === Implementations === */
+
 impl Orchestrator {
-    pub async fn create(config: Config, mut context: HardwareContext) -> Result<Self> {
+    pub async fn try_new(config: Config, mut context: HardwareContext) -> Result<Self> {
         let path = config.sink.session_path.wrap_err("Session path not set")?;
 
         let (sink, streams) = DataSink::builder().with_context(&mut context).await.build();
@@ -70,7 +84,7 @@ impl Orchestrator {
 
     pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<()> {
         for instruction in instructions {
-            let r = self.execute_instruction(instruction).await;
+            let r = self.instruction(instruction).await;
             r?;
         }
 
@@ -79,21 +93,21 @@ impl Orchestrator {
 
     pub async fn record(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
         if let Some(audio) = &self.audio {
-            let _ = audio.queue(AudioFile::BeepUp);
+            let _ = audio.queue(AudioFile::Up);
         }
 
         self.sink.start_recording().await;
 
         self.execute(instructions).await.inspect_err(|_| {
             if let Some(audio) = &self.audio {
-                let _ = audio.queue(AudioFile::BeepDouble);
+                let _ = audio.queue(AudioFile::Double);
             }
         })?;
 
         let run = self.sink.stop_recording().await;
 
         if let Some(audio) = &self.audio {
-            let _ = audio.queue(AudioFile::BeepDown);
+            let _ = audio.queue(AudioFile::Down);
         }
 
         self.session.append_run(&run).await?;
@@ -101,24 +115,30 @@ impl Orchestrator {
         Ok(run)
     }
 
-    async fn execute_instruction(&mut self, instruction: Instruction) -> Result<()> {
+    async fn instruction(&mut self, instruction: Instruction) -> Result<()> {
         match instruction {
-            Instruction::LoadCell(instruction) => {
-                require_module(&mut self.context.load_cell)?
-                    .execute(instruction)
+            Instruction::LoadCell(command) => {
+                require_agent(&mut self.context.load_cell)?
+                    .command(command)
                     .await?;
             }
 
-            Instruction::RobotArm(instruction) => {
-                require_module(&mut self.context.robot_arm)?
-                    .execute(instruction)
+            Instruction::Robot(command) => {
+                require_agent(&mut self.context.robot_arm)?
+                    .command(command)
                     .await?;
             }
 
-            Instruction::WindShape(instruction) => {
-                require_module(&mut self.context.wind_shape)?
-                    .execute(instruction)
+            Instruction::Wind(command) => {
+                require_agent(&mut self.context.wind_shape)?
+                    .command(command)
                     .await?;
+            }
+
+            Instruction::BiasAll => {
+                for device in self.context.iter_mut() {
+                    device.bias().await;
+                }
             }
 
             Instruction::Sleep(duration) => {
@@ -127,7 +147,7 @@ impl Orchestrator {
 
             Instruction::Reset => {
                 for device in self.context.iter_mut() {
-                    device.reset_error().await;
+                    device.clear_error().await;
                 }
             }
         }
@@ -156,22 +176,10 @@ impl Orchestrator {
     }
 }
 
-/* == Instruction == */
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum Instruction {
-    LoadCell(LoadCellInstruction),
-    RobotArm(RobotArmInstruction),
-    WindShape(WindShapeInstruction),
-    Sleep(Duration),
-    Reset,
-}
-
 /* == Misc == */
 
-fn require_module<T: HardwareAgent>(module: &mut Option<T>) -> Result<&mut T> {
-    match module {
-        Some(module) => Ok(module),
-        None => bail!("Module {} not available", type_name::<T>()),
-    }
+fn require_agent<T: HardwareAgent>(module: &mut Option<T>) -> Result<&mut T> {
+    module
+        .as_mut()
+        .ok_or_else(|| eyre!("Hardware {} not available", type_name::<T>()))
 }

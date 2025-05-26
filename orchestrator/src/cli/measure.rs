@@ -8,11 +8,14 @@ use tokio::time::sleep;
 use crate::{
     config::{Config, HardwareConfig},
     data::{experiment::Run, processing::StreamFilter, sink::DataSink},
-    defs::{Load, PoseEuler},
+    defs::{Load, Point},
     hardware::{
         HardwareContext,
         load_cell::LoadCell,
-        robot_arm::{Motion, MotionDiscriminants, SpeedProfile},
+        robot_arm::{
+            defs::{ArmConfig, Motion, MotionKind, Profile},
+            protocol::Instruction as RI,
+        },
     },
     misc::data::deinterleave_data,
 };
@@ -35,10 +38,10 @@ pub struct MeasureOpts {
 pub struct Measure;
 
 impl Measure {
-    const POSES: [PoseEuler; 3] = [
-        PoseEuler::new(400., 50., 300., 0., 0., 0.),
-        PoseEuler::new(400., 50., 300., 0., 90., 0.),
-        PoseEuler::new(400., 50., 300., 90., 0., 0.),
+    const POSES: [Point; 3] = [
+        Point::new(400., 50., 300., 0., 0., 0.),
+        Point::new(400., 50., 300., 0., 90., 0.),
+        Point::new(400., 50., 300., 90., 0., 0.),
     ];
 
     const OFFSET_X: f32 = 175.;
@@ -63,38 +66,35 @@ impl Measure {
 
         let (sink, streams) = builder.build();
 
-        let robot_arm = context.robot_arm.as_mut().unwrap();
-        let controller = robot_arm.controller();
+        let robot = context.robot_arm.as_mut().unwrap();
 
-        controller.set_offset(PoseEuler::default()).await?;
-        controller.set_config([0, 0, 0]).await?;
+        for i in [
+            RI::SetToolOffset(Point::ZERO),
+            RI::SetConfig(ArmConfig::default()),
+            RI::SetProfile(
+                Profile::builder()
+                    .with_translation(500.)
+                    .with_rotation(180.)
+                    .with_smoothing(30)
+                    .build(),
+            ),
+            RI::ReturnHome(MotionKind::Direct),
+        ] {
+            robot.instruction(i).await?;
+        }
 
-        controller
-            .set_profile(SpeedProfile {
-                acceleration_scale: 30,
-                deceleration_scale: 30,
-                translation_limit: 500.,
-                rotation_limit: 180.,
-                ..Default::default()
-            })
-            .await?;
+        robot.try_wait_settled().await?;
 
-        controller.go_home(MotionDiscriminants::Direct).await?;
-        controller.wait_settled().await?;
-
-        controller
-            .set_offset(PoseEuler {
-                x: Self::OFFSET_X,
-                ..Default::default()
-            })
-            .await?;
+        let point_offset = Point::new(Self::OFFSET_X, 0., 0., 0., 0., 0.);
+        robot.instruction(RI::SetToolOffset(point_offset)).await?;
 
         let mut runs: Vec<Run> = Vec::with_capacity(Self::POSES.len());
 
         for pose in Self::POSES {
             tracing::info!("Moving to pose...");
-            controller.move_to(Motion::Direct(pose)).await?;
-            controller.wait_settled().await?;
+
+            robot.instruction(RI::Move(Motion::Direct(pose))).await?;
+            robot.try_wait_settled().await?;
 
             tracing::info!("Stabilising...");
             sleep(Duration::from_secs(2)).await;
@@ -106,8 +106,11 @@ impl Measure {
             runs.push(run);
         }
 
-        controller.go_home(MotionDiscriminants::Direct).await?;
-        controller.wait_settled().await?;
+        robot
+            .instruction(RI::ReturnHome(MotionKind::Direct))
+            .await?;
+
+        robot.try_wait_settled().await?;
 
         let mut results = Vec::with_capacity(runs.len());
 
@@ -172,7 +175,7 @@ fn solve_bias(loads: [Load; 3]) -> Load {
     let force = Vector3::new(fx, fy, fz) / 2.;
     let moment = Vector3::new(mx, my, mz);
 
-    Load::new(force, moment)
+    Load { force, moment }
 }
 
 /// Calculates the gravitational force magnitude (mg) on the object and its

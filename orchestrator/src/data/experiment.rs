@@ -3,14 +3,16 @@ use std::{
     slice::{ChunksExact, Iter},
 };
 
-use bincode::{Decode, Encode};
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, TryGetError};
 use chunked_bytes::ChunkedBytes;
-use eyre::{Context, ContextCompat, Result, bail};
+use eyre::{Context, ContextCompat, Result, eyre};
 use polars::prelude::*;
 use tokio::fs;
 
-use crate::{data::sink::StreamInfo, misc::standard_config};
+use crate::{
+    data::sink::StreamInfo,
+    misc::buf::{BufExt, BufMutExt, Decode, DecodeError, Encode},
+};
 
 use super::{
     processing::{SegmentationMethod, SegmentedRun},
@@ -28,10 +30,8 @@ pub struct Experiment {
     pub runs: Vec<Run>,
 }
 
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug)]
 pub struct ExperimentHeader {
-    magic_number: [u8; 4],
-    version: u8,
     pub name: String,
     pub streams: Box<[u8]>,
 }
@@ -97,18 +97,21 @@ impl Experiment {
 
         SessionMetadata { streams }
     }
+}
 
-    pub fn decode<B: Buf>(buf: &mut B) -> Result<Self> {
-        let header: ExperimentHeader =
-            bincode::decode_from_std_read(&mut buf.reader(), standard_config())?;
+impl Encode for Experiment {
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        self.header.encode(buf);
 
-        if header.magic_number != MAGIC_NUMBER {
-            bail!("Invalid magic number");
+        for run in &self.runs {
+            run.encode(buf);
         }
+    }
+}
 
-        if header.version != FORMAT_VERSION {
-            bail!("Unsupported format version");
-        }
+impl Decode for Experiment {
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, DecodeError> {
+        let header = ExperimentHeader::decode(buf)?;
 
         let mut runs = Vec::new();
 
@@ -118,26 +121,50 @@ impl Experiment {
 
         Ok(Experiment { header, runs })
     }
-
-    pub fn encode<B: BufMut>(&self, buf: &mut B) -> Result<()> {
-        bincode::encode_into_std_write(&self.header, &mut buf.writer(), standard_config())?;
-
-        for run in &self.runs {
-            run.encode(buf);
-        }
-
-        Ok(())
-    }
 }
 
 impl ExperimentHeader {
     pub fn new(name: String, streams: Box<[u8]>) -> Self {
-        Self {
-            magic_number: MAGIC_NUMBER,
-            version: FORMAT_VERSION,
-            name,
-            streams,
+        Self { name, streams }
+    }
+}
+
+impl Encode for ExperimentHeader {
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        buf.put_slice(&MAGIC_NUMBER);
+        buf.put_u8(FORMAT_VERSION);
+        buf.put_string(&self.name);
+
+        buf.put_u8(self.streams.len() as u8);
+
+        for s in &self.streams {
+            buf.put_u8(*s);
         }
+    }
+}
+
+impl Decode for ExperimentHeader {
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, DecodeError> {
+        let mut magic_number = [0; MAGIC_NUMBER.len()];
+
+        buf.try_copy_to_slice(&mut magic_number)?;
+
+        if magic_number != MAGIC_NUMBER {
+            Err(eyre!("Invalid magic number"))?;
+        }
+
+        if buf.try_get_u8()? != FORMAT_VERSION {
+            Err(eyre!("Unsupported format version"))?;
+        }
+
+        let name = buf.try_get_string()?;
+
+        let streams = (0..buf.try_get_u8()?)
+            .map(|_| buf.try_get_u8())
+            .collect::<Result<Vec<_>, TryGetError>>()?
+            .into_boxed_slice();
+
+        Ok(Self { name, streams })
     }
 }
 

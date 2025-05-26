@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 use eyre::{Result, bail};
-use indicatif::ProgressBar;
+use indicatif::{ProgressBar, ProgressStyle};
 use polars::prelude::*;
 use tokio::fs;
 
 use crate::data::{
     experiment::Experiment,
+    processing::StreamFilter,
     session::{Session, SessionMetadata},
 };
 
@@ -23,6 +24,9 @@ pub struct ExportOpts {
 
     #[clap(short, long, default_value_t = DEFAULT_DIVISIONS)]
     pub divisions: u32,
+
+    #[clap(short, long)]
+    cutoff_frequency: Option<f32>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -50,6 +54,15 @@ pub async fn export(opts: ExportOpts) -> Result<()> {
     tracing::info!("Found {} experiments", experiments.len());
 
     let bar = ProgressBar::new(experiments.len() as u64);
+
+    bar.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+        )
+        .unwrap()
+        .progress_chars("##-"),
+    );
+
     let mut total_runs = 0;
 
     for (id, path) in experiments {
@@ -57,8 +70,14 @@ pub async fn export(opts: ExportOpts) -> Result<()> {
 
         let experiment = Experiment::load(&path).await?;
 
-        for (i, run) in experiment.runs.into_iter().enumerate() {
-            total_runs += 1;
+        for (i, mut run) in experiment.runs.into_iter().enumerate() {
+            if let Some(cutoff_frequency) = opts.cutoff_frequency {
+                let filter = StreamFilter::new(cutoff_frequency as f64);
+
+                for stream in &mut run.recorded_streams {
+                    let _ = filter.apply(stream);
+                }
+            }
 
             let run_name = Session::output_name(id, i, extension);
             let run_path = output_dir.join(run_name);
@@ -75,6 +94,8 @@ pub async fn export(opts: ExportOpts) -> Result<()> {
                     ParquetWriter::new(&mut file).finish(&mut df)?;
                 }
             }
+
+            total_runs += 1;
         }
     }
 

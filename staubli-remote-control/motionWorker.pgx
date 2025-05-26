@@ -18,6 +18,10 @@
     elseIf motionType == 2
       logMsg("[MOTION] Joint move")
       movej(pose, selectedTool, moveConfig)
+      
+    elseIf motionType == 3
+      logMsg("[MOTION] Circular move")
+      movec(intermediate, target, selectedTool, moveConfig)
     endIf
 
   endWhile

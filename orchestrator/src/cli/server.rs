@@ -25,7 +25,7 @@ pub async fn launch(config_path: &str, port: u16) -> Result<()> {
 
     let context = HardwareContext::builder().build(&config.hardware).await?;
 
-    let orchestrator = Orchestrator::create(config, context).await?;
+    let orchestrator = Orchestrator::try_new(config, context).await?;
     let (app, state) = create_router(orchestrator);
 
     let socket = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;

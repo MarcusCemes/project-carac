@@ -1,62 +1,133 @@
-use bincode::{Decode, Encode};
+use bytes::{Buf, BufMut};
 use nalgebra::{UnitQuaternion, Vector3};
 use serde::{Deserialize, Serialize};
 
+use crate::misc::buf::{Decode, DecodeError, Encode};
+
+/* == Points == */
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Point {
+    pub position: Vector3<f32>,
+    pub orientation: Vector3<f32>,
+}
+
+impl Point {
+    pub const CHANNELS: [&str; Self::WIDTH] = ["x", "y", "z", "rol", "pitch", "yaw"];
+    pub const WIDTH: usize = 6;
+
+    pub const ZERO: Self = Self {
+        position: Vector3::new(0., 0., 0.),
+        orientation: Vector3::new(0., 0., 0.),
+    };
+
+    pub const fn new(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32) -> Self {
+        Self {
+            position: Vector3::new(x, y, z),
+            orientation: Vector3::new(rx, ry, rz),
+        }
+    }
+
+    pub const fn position(x: f32, y: f32, z: f32) -> Self {
+        Self {
+            position: Vector3::new(x, y, z),
+            orientation: Vector3::new(0., 0., 0.),
+        }
+    }
+
+    pub const fn array(&self) -> [f32; Self::WIDTH] {
+        let [[x, y, z]] = self.position.data.0;
+        let [[rx, ry, rz]] = self.orientation.data.0;
+
+        [x, y, z, rx, ry, rz]
+    }
+}
+
+impl Encode for Point {
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        buf.put_f32(self.position.x);
+        buf.put_f32(self.position.y);
+        buf.put_f32(self.position.z);
+        buf.put_f32(self.orientation.x);
+        buf.put_f32(self.orientation.y);
+        buf.put_f32(self.orientation.z);
+    }
+}
+
+impl Decode for Point {
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, DecodeError> {
+        Ok(Self {
+            position: Vector3::new(buf.try_get_f32()?, buf.try_get_f32()?, buf.try_get_f32()?),
+            orientation: Vector3::new(buf.try_get_f32()?, buf.try_get_f32()?, buf.try_get_f32()?),
+        })
+    }
+}
+
+impl From<&[f32; Self::WIDTH]> for Point {
+    fn from(array: &[f32; Self::WIDTH]) -> Self {
+        let [fx, fy, fz, ox, oy, oz] = *array;
+
+        Point {
+            position: Vector3::new(fx, fy, fz),
+            orientation: Vector3::new(ox, oy, oz),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
-pub struct Pose {
+pub struct PointQ {
     pub position: Vector3<f32>,
     pub orientation: UnitQuaternion<f32>,
 }
 
-impl Pose {
-    pub const CHANNELS: [&str; 7] = ["x", "y", "z", "i", "j", "k", "w"];
-
-    pub fn array(self) -> [f32; 7] {
-        let (p, o) = (self.position, self.orientation);
-        [p.x, p.y, p.z, o.i, o.j, o.k, o.w]
-    }
-}
-
-#[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
-pub struct PoseEuler {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub rx: f32,
-    pub ry: f32,
-    pub rz: f32,
-}
-
-impl PoseEuler {
-    pub const fn new(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32) -> Self {
+impl PointQ {
+    pub fn new(position: Vector3<f32>, orientation: UnitQuaternion<f32>) -> Self {
         Self {
-            x,
-            y,
-            z,
-            rx,
-            ry,
-            rz,
-        }
-    }
-
-    pub fn array(self) -> [f32; 6] {
-        [self.x, self.y, self.z, self.rx, self.ry, self.rz]
-    }
-}
-
-impl From<&PoseEuler> for Pose {
-    fn from(point: &PoseEuler) -> Self {
-        Pose {
-            position: Vector3::new(point.x, point.y, point.z),
-            orientation: UnitQuaternion::from_euler_angles(point.rx, point.ry, point.rz),
+            position,
+            orientation,
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, Decode, Default, Deserialize, Encode, PartialEq, Serialize)]
-pub struct RobotJoints([f32; 6]);
+impl From<&Point> for PointQ {
+    fn from(value: &Point) -> Self {
+        let [[x, y, z]] = value.orientation.data.0;
 
-/* == Load ==  */
+        PointQ {
+            position: value.position,
+            orientation: UnitQuaternion::from_euler_angles(x, y, z),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Joints([f32; Self::WIDTH]);
+
+impl Joints {
+    const WIDTH: usize = 6;
+}
+
+impl Encode for Joints {
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        for value in self.0 {
+            buf.put_f32(value);
+        }
+    }
+}
+
+impl Decode for Joints {
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, DecodeError> {
+        let mut joints = [0.0; Self::WIDTH];
+
+        for value in &mut joints {
+            *value = buf.try_get_f32()?;
+        }
+
+        Ok(Self(joints))
+    }
+}
+
+/* == Force/Moment ==  */
 
 #[derive(Copy, Clone, Debug)]
 pub struct Load {
@@ -65,31 +136,19 @@ pub struct Load {
 }
 
 impl Load {
-    pub fn new(force: Vector3<f32>, moment: Vector3<f32>) -> Self {
-        Self { force, moment }
+    pub const CHANNELS: [&str; Self::WIDTH] = ["fx", "fy", "fz", "mx", "my", "mz"];
+    pub const WIDTH: usize = 6;
+
+    pub const fn new(fx: f32, fy: f32, fz: f32, mx: f32, my: f32, mz: f32) -> Self {
+        Self {
+            force: Vector3::new(fx, fy, fz),
+            moment: Vector3::new(mx, my, mz),
+        }
     }
 
-    pub fn array(&self) -> [f32; 6] {
+    pub const fn array(&self) -> [f32; Self::WIDTH] {
         let [[fx, fy, fz]] = self.force.data.0;
-        let [[tx, ty, tz]] = self.moment.data.0;
-        [fx, fy, fz, tx, ty, tz]
-    }
-}
-
-/* == Tests == */
-
-#[cfg(test)]
-mod tests {
-    use std::mem;
-
-    use super::*;
-
-    const POSE_SIZE: usize = 6 * std::mem::size_of::<f32>();
-
-    /// Verify sizes for bincode encode/decode
-    #[test]
-    fn test_struct_sizes() {
-        assert_eq!(mem::size_of::<PoseEuler>(), POSE_SIZE);
-        assert_eq!(mem::size_of::<RobotJoints>(), POSE_SIZE);
+        let [[mx, my, mz]] = self.moment.data.0;
+        [fx, fy, fz, mx, my, mz]
     }
 }

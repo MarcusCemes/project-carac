@@ -24,8 +24,8 @@ pub trait HardwareAgent: Display + Send {
         Ok(())
     }
 
-    async fn reset_error(&mut self) {}
-
+    async fn clear_error(&mut self) {}
+    async fn bias(&mut self) {}
     async fn start(&mut self) {}
     async fn stop(&mut self) {}
 }
@@ -72,15 +72,15 @@ impl HardwareContextBuilder {
         let initialiser = HardwareInitializer::new(self.timeout);
 
         let motion_capture = initialiser
-            .init(&config.motion_capture, MotionCapture::connect_from_config)
+            .init(&config.motion_capture, MotionCapture::try_new_from_config)
             .await?;
 
         let load_cell = initialiser
-            .init(&config.load_cell, LoadCell::connect_from_config)
+            .init(&config.load_cell, LoadCell::try_new_from_config)
             .await?;
 
         let robot_arm = initialiser
-            .init(&config.robot_arm, RobotArm::connect_from_config)
+            .init(&config.robot_arm, RobotArm::try_new_from_config)
             .await?;
 
         let wind_shape = initialiser

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use bytes::BufMut;
 use chunked_bytes::ChunkedBytes;
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,7 +10,7 @@ use tokio::{
 
 use crate::{
     data::{experiment::Run, sink::StreamInfo},
-    misc::standard_config,
+    misc::buf::Encode,
 };
 
 use super::experiment::ExperimentHeader;
@@ -63,12 +62,12 @@ impl Session {
             .join(Self::TEMP_EXPERIMENT_NAME);
 
         let mut file = File::create(path).await?;
-        let mut buf = ChunkedBytes::new().writer();
+        let mut buf = ChunkedBytes::new();
 
         let header = ExperimentHeader::new(name, self.metadata.channels());
-        bincode::encode_into_std_write(&header, &mut buf, standard_config()).unwrap();
+        header.encode(&mut buf);
 
-        file.write_all_buf(&mut buf.into_inner()).await?;
+        file.write_all_buf(&mut buf).await?;
 
         self.open_experiment = Some((file, header.name));
 

@@ -36,7 +36,7 @@
     value.config.wrist = wnegative
   endIf
 
-  logMsg("S: " + toString("1", buffer[0]) + "  E: " + toString("1", buffer[1]) + "  W: " + toString("1", buffer[2]))
+  logMsg("S: " + toString("", buffer[0]) + "  E: " + toString("", buffer[1]) + "  W: " + toString("", buffer[2]))
 end
 ]]></Code>
   </Program>

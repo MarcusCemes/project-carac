@@ -6,12 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use bytes::{Buf, BufMut};
-use eyre::{Report, Result, bail, eyre};
-use nalgebra::Vector3;
-use serde::{Deserialize, Serialize};
-use strum::{AsRefStr, EnumDiscriminants};
+use eyre::{Report, Result, bail};
 use thiserror::Error;
 use tokio::{
     net::UdpSocket,
@@ -26,24 +21,25 @@ use crate::{
     data::sink::{DataSinkBuilder, StreamWriter},
     defs::*,
     hardware::HardwareAgent,
-    misc::network_config,
+    misc::buf::{Decode, Encode},
 };
 
-const NAME: &str = "robot_arm";
+use self::{defs::*, protocol::*};
 
-const BUFFER_SIZE: usize = 1024;
-const HANDSHAKE_REQUEST_ID: u8 = 0;
-const MAGIC_HEADER: u8 = 0x95;
+pub mod defs;
+pub mod protocol;
 
-const MAX_SETTLE_WAIT_MS: u64 = 100;
+/* === Definitions === */
 
 pub struct RobotArm {
     inner: Arc<Inner>,
-    task: JoinHandle<Result<()>>,
+
+    receiver: JoinHandle<Result<()>>,
+    watchdog: JoinHandle<Result<()>>,
 }
 
 struct Inner {
-    error: watch::Sender<Option<u16>>,
+    error: watch::Sender<Option<RobotError>>,
     shared: Mutex<Shared>,
     socket: UdpSocket,
     state: watch::Sender<Option<State>>,
@@ -53,58 +49,36 @@ struct Inner {
 struct Shared {
     ack: Option<(u8, oneshot::Sender<()>)>,
     command_counter: u8,
+    origin: Point,
     stream: Option<StreamWriter>,
 }
 
-#[derive(Debug)]
-enum Response {
-    Ack(u8),
-    Error(u16),
-    Motion(MotionState),
-    PowerOff,
-    Status(State),
-}
+#[derive(Copy, Clone, Debug, Error)]
+pub enum RobotError {
+    #[error("Robot unreachable")]
+    Unreachable,
 
-#[derive(Debug, Decode)]
-struct State {
-    motion: MotionState,
-    position: PoseEuler,
-    pose: RobotJoints,
-    error: RobotJoints,
-}
+    #[error("Robot powered off")]
+    PoweredOff,
 
-#[derive(Debug, Decode)]
-struct MotionState {
-    settled: bool,
-    idle: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum RobotArmInstruction {
-    Move(Motion),
-    GoHome(MotionDiscriminants),
-    SetBlending(Blending),
-    SetConfig([u8; 3]),
-    SetOffset(PoseEuler),
-    SetProfile(SpeedProfile),
-    SetReportInterval(f32),
-    WaitSettled,
-}
-
-#[derive(Debug, Error)]
-pub enum RobotArmError {
     #[error("Robot error (code {0})")]
-    RemoteError(u16),
+    Remote(u16),
 }
+
+/* === Implementations === */
 
 impl RobotArm {
-    pub const BASE_POSITION: Vector3<f32> = Vector3::new(50., 50., 300.);
+    pub const NAME: &str = "robot";
+    pub const CHANNELS: [&str; Point::WIDTH] = Point::CHANNELS;
 
-    pub async fn connect_from_config(config: &RobotArmConfig) -> Result<Self> {
-        Self::connect(config.ip, config.port).await
-    }
+    pub const HOME_POINT: Point = Point::new(50., 50., 300., 0., 0., 0.);
+    pub const WORK_POINT: Point = Point::new(1400., 50., 300., 0., 0., 0.);
 
-    pub async fn connect(ip: IpAddr, port: u16) -> Result<RobotArm> {
+    const BUFFER_SIZE: usize = 1024;
+    const HANDSHAKE_REQUEST_ID: u8 = 0;
+    const MAX_SETTLE: Duration = Duration::from_millis(100);
+
+    pub async fn try_new(ip: IpAddr, port: u16) -> Result<RobotArm> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
         socket.connect((ip, port)).await?;
 
@@ -114,72 +88,70 @@ impl RobotArm {
         let (state, _) = watch::channel(None);
 
         let inner = Arc::new(Inner::new(error, socket, state));
-        let task = tokio::spawn(Self::robot_arm_task(inner.clone()));
+        let receiver = tokio::spawn(Self::receiver_task(inner.clone()));
+        let watchdog = tokio::spawn(Self::watchdog_task(inner.clone()));
 
-        Ok(RobotArm { inner, task })
+        Ok(RobotArm {
+            inner,
+            receiver,
+            watchdog,
+        })
     }
 
-    pub async fn execute(&mut self, instruction: RobotArmInstruction) -> Result<()> {
-        let command = match instruction {
-            RobotArmInstruction::Move(motion) => RobotCommand::Move(motion),
-            RobotArmInstruction::GoHome(kind) => RobotCommand::ReturnHome(kind),
-            RobotArmInstruction::SetBlending(blending) => RobotCommand::SetBlending(blending),
-            RobotArmInstruction::SetConfig(config) => RobotCommand::SetConfig(config),
-            RobotArmInstruction::SetOffset(offset) => RobotCommand::SetToolOffset(offset),
-            RobotArmInstruction::SetProfile(profile) => RobotCommand::SetSpeedProfile(profile),
-            RobotArmInstruction::SetReportInterval(t) => RobotCommand::SetReportInterval(t),
-            RobotArmInstruction::WaitSettled => return Ok(self.try_wait_settled().await?),
-        };
-
-        self.execute_command(command).await
+    pub async fn try_new_from_config(config: &RobotArmConfig) -> Result<Self> {
+        Self::try_new(config.ip, config.port).await
     }
 
     async fn handshake(socket: &UdpSocket) -> Result<()> {
-        let mut buf = Vec::with_capacity(BUFFER_SIZE);
-        RobotCommand::Hello.encode(&mut buf, HANDSHAKE_REQUEST_ID);
-
         tracing::debug!("Handshaking with robot...");
+
+        let mut buf = Vec::with_capacity(Self::BUFFER_SIZE);
+
+        Request::new(Self::HANDSHAKE_REQUEST_ID, Instruction::Hello).encode(&mut buf);
+
         socket.send(&buf).await?;
 
         loop {
             buf.clear();
 
-            let (size, addr) = socket.recv_buf_from(&mut buf).await?;
-            tracing::debug!("{size} {addr:?}");
+            socket.recv_buf(&mut buf).await?;
 
-            if let Response::Ack(0) = Response::decode(&buf[..])? {
+            if let Response::Ack(0) = Response::decode(&mut &buf[..])? {
                 break;
             }
         }
 
-        tracing::info!("Handshake successful!");
+        tracing::info!("Handshake successful");
         Ok(())
-    }
-
-    pub async fn set_stream_writer(&self, handle: StreamWriter) {
-        self.inner.shared.lock().await.stream = Some(handle)
-    }
-
-    pub fn controller(&self) -> RobotController {
-        RobotController(self)
     }
 
     /* == Commands == */
 
-    pub async fn execute_command(&self, command: RobotCommand) -> Result<()> {
-        let (ack_tx, ack) = oneshot::channel();
+    pub async fn command(&mut self, command: Command) -> Result<()> {
+        match command {
+            Command::Remote(instruction) => self.instruction(instruction).await,
 
-        let request_id = {
-            let mut lock = self.inner.shared.lock().await;
-            let request_id = lock.request_id();
-            lock.ack = Some((request_id, ack_tx));
-            request_id
-        };
+            Command::SetOrigin(point) => {
+                self.inner.shared.lock().await.origin = point;
+                Ok(())
+            }
 
-        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+            Command::WaitSettled => {
+                self.try_wait_settled().await?;
+                Ok(())
+            }
+        }
+    }
 
-        tracing::trace!("-> {} ({request_id})", command.as_ref());
-        command.encode(&mut buf, request_id);
+    /* == Instructions == */
+
+    pub async fn instruction(&self, instruction: Instruction) -> Result<()> {
+        let mut buf = Vec::with_capacity(Self::BUFFER_SIZE);
+
+        let (request_id, ack) = self.next_request_id().await;
+
+        Request::new(request_id, instruction).encode(&mut buf);
+
         self.inner.socket.send(&buf).await?;
 
         ack.await.ok();
@@ -187,15 +159,66 @@ impl RobotArm {
         Ok(())
     }
 
-    pub async fn try_wait_settled(&self) -> Result<(), RobotArmError> {
+    /* == Background tasks == */
+
+    async fn receiver_task(inner: Arc<Inner>) -> Result<()> {
+        let mut buf = Vec::with_capacity(Self::BUFFER_SIZE);
+
+        loop {
+            buf.clear();
+
+            inner.socket.recv_buf(&mut buf).await?;
+
+            match Response::decode(&mut &buf[..])? {
+                Response::Ack(id) => {
+                    tracing::trace!("<- Ack ({id})");
+                    let mut lock = inner.shared.lock().await;
+
+                    lock.ack
+                        .take_if(|(ack_id, _)| *ack_id == id)
+                        .and_then(|(_, ack)| ack.send(()).ok());
+                }
+
+                Response::Error(code) => {
+                    let _ = inner.error.send(Some(RobotError::Remote(code)));
+                }
+
+                Response::PowerOff => {
+                    let _ = inner.error.send(Some(RobotError::PoweredOff));
+                }
+
+                Response::State(state) => {
+                    if let Some(stream) = &inner.shared.lock().await.stream {
+                        stream.add(&state.position.array()).await;
+                    }
+
+                    inner.state.send_replace(Some(state));
+                }
+            }
+        }
+    }
+
+    async fn watchdog_task(_inner: Arc<Inner>) -> Result<()> {
+        tracing::warn!("Watchdog not implemented!");
+        Ok(())
+    }
+
+    /* == Miscellaneous == */
+
+    pub async fn try_wait_settled(&self) -> Result<(), RobotError> {
         let mut error = self.inner.error.subscribe();
         let mut state = self.inner.state.subscribe();
 
-        let error_task = error.wait_for(Option::is_some);
+        let error_task = async {
+            error.wait_for(Option::is_some).await.map(|maybe_error| {
+                // SAFETY: wait_for guarantees that the value is Some
+                unsafe { maybe_error.unwrap_unchecked() }
+            })
+        };
 
         let mut moving_task = async || -> Result<()> {
             timeout(
-                Duration::from_millis(MAX_SETTLE_WAIT_MS),
+                Self::MAX_SETTLE,
                 Self::wait_for_settled_value(&mut state, false),
             )
             .await??;
@@ -208,7 +231,7 @@ impl RobotArm {
 
         // Race the error and negative moving edge, whichever comes first
         select! {
-            Ok(code) = error_task => Err(RobotArmError::RemoteError(code.unwrap())),
+            Ok(error) = error_task => Err(error),
             _ = moving_task() => Ok(()),
         }
     }
@@ -218,63 +241,21 @@ impl RobotArm {
         value: bool,
     ) -> Result<(), watch::error::RecvError> {
         receiver
-            .wait_for(|s| s.as_ref().is_some_and(|s| s.motion.settled == value))
+            .wait_for(|s| s.as_ref().is_some_and(|s| s.settled == value))
             .await?;
 
         Ok(())
     }
 
-    /* == Background tasks == */
+    async fn next_request_id(&self) -> (u8, oneshot::Receiver<()>) {
+        let (ack_tx, ack_rx) = oneshot::channel();
 
-    async fn robot_arm_task(inner: Arc<Inner>) -> Result<()> {
-        let mut buf = Vec::with_capacity(BUFFER_SIZE);
+        let mut lock = self.inner.shared.lock().await;
+        let request_id = lock.next_id();
 
-        loop {
-            inner.socket.recv_buf(&mut buf).await?;
+        lock.ack = Some((request_id, ack_tx));
 
-            if buf[1] != 1 {
-                tracing::trace!("Got message, {:?}", &buf[0..3]);
-            }
-
-            match Response::decode(&buf[..])? {
-                Response::Status(state) => {
-                    if let Some(stream) = &inner.shared.lock().await.stream {
-                        let pose = Pose::from(&state.position);
-                        stream.add(&pose.array()).await;
-                    }
-
-                    inner.state.send_replace(Some(state));
-                }
-
-                Response::Ack(id) => {
-                    tracing::trace!("<- Ack ({id})");
-                    let mut lock = inner.shared.lock().await;
-
-                    lock.ack
-                        .take_if(|(ack_id, _)| *ack_id == id)
-                        .and_then(|(_, ack)| ack.send(()).ok());
-                }
-
-                Response::Error(code) => {
-                    tracing::warn!("Robot error (code {code})");
-                    inner.error.send(Some(code)).ok();
-                }
-
-                Response::Motion(motion) => {
-                    inner.state.send_modify(|maybe_state| {
-                        if let Some(state) = maybe_state {
-                            state.motion = motion;
-                        }
-                    });
-                }
-
-                Response::PowerOff => {
-                    tracing::info!("Power off");
-                }
-            }
-
-            buf.clear();
-        }
+        (request_id, ack_rx)
     }
 }
 
@@ -288,52 +269,46 @@ impl HardwareAgent for RobotArm {
     }
 
     async fn start(&mut self) {
-        tracing::debug!("Requesting robot reporting");
-
-        self.execute_command(RobotCommand::SetReporting(true))
-            .await
-            .ok();
-
-        self.execute_command(RobotCommand::SetSpeedProfile(SpeedProfile::default()))
-            .await
-            .ok();
+        for i in [
+            Instruction::SetReporting(true),
+            Instruction::SetProfile(Profile::default()),
+        ] {
+            let _ = self.instruction(i).await;
+        }
     }
 
     async fn stop(&mut self) {
-        tracing::debug!("Stopping robot reporting");
-        self.execute_command(RobotCommand::SetReporting(false))
-            .await
-            .ok();
+        let _ = self.instruction(Instruction::SetReporting(false)).await;
     }
 
     async fn register(&mut self, sink: &mut DataSinkBuilder) {
-        let name = NAME.to_owned();
-        let channels = Pose::CHANNELS.map(str::to_owned).to_vec();
+        let name = Self::NAME.to_owned();
+        let channels = Self::CHANNELS.map(str::to_owned).to_vec();
         let stream = sink.register_stream(name, channels).await;
 
         self.inner.shared.lock().await.stream = Some(stream);
     }
 
-    async fn reset_error(&mut self) {
+    async fn clear_error(&mut self) {
         self.inner.error.send_replace(None);
     }
 }
 
 impl fmt::Display for RobotArm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{NAME}")
+        write!(f, "{}", Self::NAME)
     }
 }
 
 impl Drop for RobotArm {
     fn drop(&mut self) {
-        self.task.abort();
+        self.receiver.abort();
     }
 }
 
 impl Inner {
     pub fn new(
-        error: watch::Sender<Option<u16>>,
+        error: watch::Sender<Option<RobotError>>,
         socket: UdpSocket,
         state: watch::Sender<Option<State>>,
     ) -> Self {
@@ -349,288 +324,8 @@ impl Inner {
 }
 
 impl Shared {
-    fn request_id(&mut self) -> u8 {
+    fn next_id(&mut self) -> u8 {
         self.command_counter = self.command_counter.wrapping_add(1);
         self.command_counter
     }
-}
-
-/* == Command == */
-
-#[derive(AsRefStr)]
-pub enum RobotCommand {
-    Halt { return_home: bool },
-    Hello,
-    Move(Motion),
-    ReturnHome(MotionDiscriminants),
-    SetBlending(Blending),
-    SetConfig([u8; 3]),
-    SetReportInterval(f32),
-    SetSpeedProfile(SpeedProfile),
-    SetToolOffset(PoseEuler),
-    SetReporting(bool),
-}
-
-#[derive(Copy, Clone, Debug, Deserialize, Serialize, EnumDiscriminants)]
-pub enum Motion {
-    Linear(PoseEuler),
-    Direct(PoseEuler),
-    Joint(RobotJoints),
-    Circular([PoseEuler; 2]),
-}
-
-impl From<u8> for MotionDiscriminants {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => MotionDiscriminants::Linear,
-            1 => MotionDiscriminants::Direct,
-            2 => MotionDiscriminants::Joint,
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for MotionDiscriminants {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(u8::deserialize(deserializer)?.into())
-    }
-}
-
-impl Serialize for MotionDiscriminants {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        (*self as u8).serialize(serializer)
-    }
-}
-
-#[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
-pub struct SpeedProfile {
-    pub translation_limit: f32,
-    pub rotation_limit: f32,
-    pub acceleration_scale: u8,
-    pub velocity_scale: u8,
-    pub deceleration_scale: u8,
-}
-
-#[derive(Copy, Clone, Debug, Decode, Deserialize, Encode, Serialize)]
-pub struct Blending {
-    pub kind: u8,
-    pub leave: u8,
-    pub reach: u8,
-}
-
-/* == Command == */
-
-impl RobotCommand {
-    fn encode<B: BufMut>(&self, b: &mut B, request_id: u8) {
-        b.put_u8(MAGIC_HEADER);
-        b.put_u8(request_id);
-
-        match self {
-            RobotCommand::Hello => {
-                b.put_u8(0x00);
-            }
-
-            RobotCommand::Halt { return_home } => {
-                b.put_u8(0x01);
-                b.put_u8(*return_home as u8);
-            }
-
-            RobotCommand::Move(motion) => {
-                let mut id = 0x02 + MotionDiscriminants::from(motion).id();
-
-                if MotionDiscriminants::from(motion) == MotionDiscriminants::Circular {
-                    id = 0x0c;
-                }
-
-                b.put_u8(id);
-
-                match motion {
-                    Motion::Linear(point) | Motion::Direct(point) => put_value(b, point),
-                    Motion::Joint(joint) => put_value(b, joint),
-
-                    Motion::Circular([i, t]) => {
-                        put_value(b, i);
-                        put_value(b, t);
-                    }
-                }
-            }
-
-            RobotCommand::SetSpeedProfile(profile) => {
-                b.put_u8(0x05);
-                put_value(b, profile);
-            }
-
-            RobotCommand::SetToolOffset(offset) => {
-                b.put_u8(0x06);
-                put_value(b, offset);
-            }
-
-            RobotCommand::SetReportInterval(interval_s) => {
-                b.put_u8(0x07);
-                b.put_f32(*interval_s);
-            }
-
-            RobotCommand::ReturnHome(motion_type) => {
-                b.put_u8(0x08);
-                b.put_u8(*motion_type as u8);
-            }
-
-            RobotCommand::SetReporting(enabled) => {
-                b.put_u8(0x09);
-                b.put_u8(*enabled as u8);
-            }
-
-            RobotCommand::SetConfig(config) => {
-                b.put_u8(0x0A);
-                b.put_slice(config);
-            }
-
-            RobotCommand::SetBlending(blending) => {
-                b.put_u8(0x0B);
-                b.put_u8(blending.kind);
-                b.put_u8(blending.leave);
-                b.put_u8(blending.reach);
-            }
-        };
-    }
-}
-
-/* == Controller == */
-
-pub struct RobotController<'a>(&'a RobotArm);
-
-impl RobotController<'_> {
-    pub async fn move_to(&self, motion: Motion) -> Result<()> {
-        self.0.execute_command(RobotCommand::Move(motion)).await
-    }
-
-    pub async fn set_config(&self, config: [u8; 3]) -> Result<()> {
-        self.0
-            .execute_command(RobotCommand::SetConfig(config))
-            .await
-    }
-
-    pub async fn set_offset(&self, offset: PoseEuler) -> Result<()> {
-        self.0
-            .execute_command(RobotCommand::SetToolOffset(offset))
-            .await
-    }
-
-    pub async fn set_profile(&self, profile: SpeedProfile) -> Result<()> {
-        self.0
-            .execute_command(RobotCommand::SetSpeedProfile(profile))
-            .await
-    }
-
-    pub async fn go_home(&self, motion_type: MotionDiscriminants) -> Result<()> {
-        self.0
-            .execute_command(RobotCommand::ReturnHome(motion_type))
-            .await
-    }
-
-    pub async fn halt(&self, return_home: bool) -> Result<()> {
-        self.0
-            .execute_command(RobotCommand::Halt { return_home })
-            .await
-    }
-
-    pub async fn wait_settled(&self) -> Result<()> {
-        if self.0.inner.state.borrow().is_none() {
-            tracing::warn!("Robot is not reporting state! This may not complete.")
-        }
-
-        self.0
-            .try_wait_settled()
-            .await
-            .map_err(|code| eyre!("Robot error (code {code})"))
-    }
-}
-
-impl MotionDiscriminants {
-    pub fn id(&self) -> u8 {
-        match self {
-            MotionDiscriminants::Linear => 0,
-            MotionDiscriminants::Direct => 1,
-            MotionDiscriminants::Joint => 2,
-            MotionDiscriminants::Circular => 3,
-        }
-    }
-}
-
-/* == Response == */
-
-impl Response {
-    fn decode<B: Buf>(mut buf: B) -> Result<Response> {
-        let buf = &mut buf;
-
-        if buf.get_u8() != MAGIC_HEADER {
-            bail!("Missing magic header");
-        }
-
-        let response = match buf.get_u8() {
-            0x00 => {
-                panic!("Picked up handshake request, this may be loopback traffic!");
-            }
-
-            0x01 => {
-                let status = get_value(buf).unwrap();
-                Response::Status(status)
-            }
-
-            0x02 => Response::Motion(MotionState {
-                settled: buf.get_u8() != 0,
-                idle: buf.get_u8() != 0,
-            }),
-
-            0x03 => Response::PowerOff,
-
-            0xFE => {
-                let id = buf.get_u8();
-                Response::Ack(id)
-            }
-
-            0xFF => {
-                let error = buf.get_u16();
-                Response::Error(error)
-            }
-
-            code => {
-                tracing::error!("Unsupported code: {code:02x}");
-                bail!("Unsupported code: {code:02x}");
-            }
-        };
-
-        Ok(response)
-    }
-}
-
-/* == SpeedProfile == */
-
-impl Default for SpeedProfile {
-    fn default() -> Self {
-        Self {
-            translation_limit: 10000.,
-            rotation_limit: 10000.,
-            acceleration_scale: 100,
-            velocity_scale: 100,
-            deceleration_scale: 10,
-        }
-    }
-}
-
-/* == Protocol == */
-
-fn get_value<B: Buf, T: Decode<()>>(buf: &mut B) -> Result<T> {
-    let value = bincode::decode_from_std_read(&mut buf.reader(), network_config())?;
-    Ok(value)
-}
-
-fn put_value<B: BufMut, T: Encode>(buf: &mut B, value: &T) {
-    bincode::encode_into_std_write(value, &mut buf.writer(), network_config()).unwrap();
 }

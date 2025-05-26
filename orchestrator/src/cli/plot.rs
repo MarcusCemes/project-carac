@@ -9,10 +9,14 @@ use tokio::fs;
 
 use crate::data::{
     experiment::Experiment,
+    plot::create_scatter_plot,
     processing::StreamFilter,
     session::{Session, SessionMetadata},
     sink::StreamInfo,
 };
+
+const HEIGHT: u32 = 1800;
+const WIDTH: u32 = 800;
 
 const PLOTS_DIR: &str = "plots";
 
@@ -117,7 +121,7 @@ fn render_experiment(
                 let filename = format!("{i:02}_{}.png", column_name.replace('/', "-"));
                 let path = experiment_dir.join(filename);
 
-                create_scatter_plot(&time, column, &plot_name, &column_name, &path)?;
+                create_and_save_plot(&time, column, &plot_name, &column_name, &path)?;
                 bar.inc(1);
             }
         }
@@ -142,64 +146,24 @@ async fn load_experiment(
     Ok((experiment, experiment_dir))
 }
 
-fn create_scatter_plot(
+fn create_and_save_plot(
     time: &[f32],
     values: Box<[f32]>,
-    name: &str,
-    axis: &str,
+    chart_name: &str,
+    axis_name: &str,
     filename: &std::path::Path,
 ) -> Result<()> {
     if time.is_empty() {
         return Ok(());
     }
 
-    let root = BitMapBackend::new(filename, (1800, 800)).into_drawing_area();
+    let backend = BitMapBackend::new(filename, (WIDTH, HEIGHT)).into_drawing_area();
 
-    root.fill(&WHITE)?;
+    backend.fill(&WHITE)?;
 
-    let n_samples = time.len();
-    let t_min = *time.first().unwrap();
-    let t_max = *time.last().unwrap();
+    create_scatter_plot(&backend, (time, &values), chart_name, axis_name)?;
 
-    let v_min = values.iter().copied().fold(f32::INFINITY, f32::min);
-    let v_max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-
-    let mut chart = ChartBuilder::on(&root)
-        .caption(name, ("sans-serif", 24))
-        .margin(24)
-        .x_label_area_size(64)
-        .y_label_area_size(64)
-        .build_cartesian_2d(t_min..t_max, v_min..v_max)?;
-
-    chart
-        .configure_mesh()
-        .x_desc("Time [s]")
-        .y_desc(axis)
-        .x_label_style(("sans-serif", 16))
-        .y_label_style(("sans-serif", 16))
-        .draw()?;
-
-    let (opacity, size) = match n_samples {
-        0..500 => (1.0, 4),
-        500..1000 => (0.5, 2),
-        _ => (0.25, 1),
-    };
-
-    let style = ShapeStyle {
-        color: RGBAColor(149, 81, 150, opacity),
-        filled: true,
-        stroke_width: 0,
-    };
-
-    let series = time
-        .into_iter()
-        .copied()
-        .zip(values.into_iter())
-        .map(|coords| Circle::new(coords, size, style));
-
-    chart.draw_series(series)?;
-
-    root.present()?;
+    backend.present()?;
 
     Ok(())
 }

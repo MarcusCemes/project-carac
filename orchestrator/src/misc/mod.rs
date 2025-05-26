@@ -1,24 +1,11 @@
 use std::{fmt::Display, time::Duration};
 
-use bincode::config::{Config, standard};
 use color_eyre::owo_colors::OwoColorize;
 
 pub mod buf;
 pub mod data;
 pub mod plot_juggler;
 pub mod serde;
-
-pub fn standard_config() -> impl Config {
-    standard().with_little_endian().with_fixed_int_encoding()
-}
-
-pub fn compact_config() -> impl Config {
-    standard().with_little_endian().with_variable_int_encoding()
-}
-
-pub fn network_config() -> impl Config {
-    standard().with_big_endian().with_fixed_int_encoding()
-}
 
 pub fn type_name<T>() -> &'static str {
     let name = std::any::type_name::<T>();

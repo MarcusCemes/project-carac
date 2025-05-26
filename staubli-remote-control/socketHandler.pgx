@@ -32,7 +32,7 @@
       logMsg("[SOCKET] Handshake request")
 
     elseIf buffer[2] == 1 and payloadSize == 1
-      logMsg("[SOCKET] Stop request")
+      logMsg("[SOCKET] Halt request")
 
       if buffer[3] == 1
         logMsg("[STOP] Returning to start")
@@ -47,51 +47,13 @@
       taskCreate "~RemoteControl", 1, stop()
       return
 
-    elseIf buffer[2] == 2 and payloadSize == 24
-      logMsg("[SOCKET] Linear move request")
-
-      wait(!motionQueued)
-      call decodeLocation(target, buffer[3])
-      motionType = 0
-      selectedTool = endEffector
-      motionQueued = true
-
-    elseIf buffer[2] == 3 and payloadSize == 24
-      logMsg("[SOCKET] Direct move request")
-
-      wait(!motionQueued)
-      call decodeLocation(target, buffer[3])
-      motionType = 1
-      selectedTool = endEffector
-      motionQueued = true
-
-    elseIf buffer[2] == 4 and payloadSize == 24
-      logMsg("[SOCKET] Joint move request")
-
-      wait(!motionQueued)
-      call decodePose(pose, buffer[3])
-      motionType = 2
-      selectedTool = endEffector
-      motionQueued = true
-
-    elseIf buffer[2] == 5 and payloadSize == 11
-      logMsg("[SOCKET] Set speed request")
-      call decodeDesc(moveConfig, buffer[3])
-
-    elseIf buffer[2] == 6 and payloadSize == 24
-      logMsg("[SOCKET] Tool offset request")
-      call decodeTool(endEffector, buffer[3])
-
-    elseIf buffer[2] == 7 and payloadSize == 4
-      logMsg("[SOCKET] Set report frequency request")
-      fromBinary(buffer[3], 4, "4.0b", reportInterval)
-
-    elseIf buffer[2] == 8 and payloadSize == 1
+    elseIf buffer[2] == 2 and payloadSize == 1
       logMsg("[SOCKET] Move home request")
 
       wait(!motionQueued)
 
       motionType = buffer[3]
+      moveConfig.blend = off
 
       if motionType == 2
         pose = BASE_POSE
@@ -102,16 +64,76 @@
       selectedTool = mount
       motionQueued = true
 
-    elseIf buffer[2] == 9 and payloadSize == 1
+    elseIf buffer[2] == 3 and payloadSize == 1
       logMsg("[SOCKET] Set reporting request")
       reportEnabled = buffer[3] != 0
 
-    elseIf buffer[2] == 10 and payloadSize == 3
+    elseIf buffer[2] == 4 and payloadSize == 4
+      logMsg("[SOCKET] Set report frequency request")
+      fromBinary(buffer[3], 4, "4.0b", reportInterval)
+
+    elseIf buffer[2] == 5 and payloadSize == 3
       logMsg("[SOCKET] Configuration request")
       call decodeConfig(target, buffer[3])
 
+    elseIf buffer[2] == 6 and payloadSize == 11
+      logMsg("[SOCKET] Set profile")
+      call decodeDesc(moveConfig, buffer[3])
+
+    elseIf buffer[2] == 7 and payloadSize == 9
+      logMsg("[SOCKET] Blending request")
+      call decodeBlend(moveConfig, buffer[3])
+
+    elseIf buffer[2] == 8 and payloadSize == 24
+      logMsg("[SOCKET] Tool offset request")
+      call decodeTool(endEffector, buffer[3])
+
+
+    elseIf buffer[2] == 32 and payloadSize == 24
+      logMsg("[SOCKET] Direct move request")
+
+      wait(!motionQueued)
+      call decodeLocation(target, buffer[3])
+
+      motionType = 1
+      selectedTool = endEffector
+      motionQueued = true
+
+    elseIf buffer[2] == 33 and payloadSize == 24
+      logMsg("[SOCKET] Linear move request")
+
+      wait(!motionQueued)
+      call decodeLocation(target, buffer[3])
+
+      motionType = 0
+      selectedTool = endEffector
+      motionQueued = true
+
+    elseIf buffer[2] == 34 and payloadSize == 24
+      logMsg("[SOCKET] Joint move request")
+
+      wait(!motionQueued)
+      call decodePose(pose, buffer[3])
+
+      motionType = 2
+      selectedTool = endEffector
+      motionQueued = true
+
+    elseIf buffer[2] == 35 and payloadSize == 48
+      logMsg("[SOCKET] Circular movement request")
+
+      wait(!motionQueued)
+
+      call decodeLocation(intermediate, buffer[3])
+      call decodeLocation(target, buffer[27])
+
+      motionType = 3
+      selectedTool = endEffector
+      motionQueued = true
+
+
     else
-      logMsg("[SOCKET] Unknown message: " + toString("", buffer[2]) + "with payload size " + toString("", payloadSize), 3)
+      logMsg("[SOCKET] Unknown message: " + toString("", buffer[2]) + " with payload size " + toString("", payloadSize), 3)
       ack = false
 
     endIf

@@ -14,9 +14,9 @@ pub struct AudioPlayer {
 
 #[derive(Copy, Clone, Debug)]
 pub enum AudioFile {
-    BeepUp,
-    BeepDown,
-    BeepDouble,
+    Up,
+    Down,
+    Double,
 }
 
 impl AudioPlayer {
@@ -50,9 +50,9 @@ fn audio_thread(queue: mpsc::Receiver<AudioFile>) -> Result<()> {
 impl AudioFile {
     fn get_bytes(self) -> &'static [u8] {
         match self {
-            AudioFile::BeepUp => include_bytes!("./assets/beep-up.wav"),
-            AudioFile::BeepDown => include_bytes!("./assets/beep-down.wav"),
-            AudioFile::BeepDouble => include_bytes!("./assets/beep-double.wav"),
+            AudioFile::Up => include_bytes!("./assets/beep-up.wav"),
+            AudioFile::Down => include_bytes!("./assets/beep-down.wav"),
+            AudioFile::Double => include_bytes!("./assets/beep-double.wav"),
         }
     }
 }
