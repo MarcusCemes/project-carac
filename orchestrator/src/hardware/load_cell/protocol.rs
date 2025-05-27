@@ -16,6 +16,7 @@ use super::LoadCell;
 /* === Definitions === */
 
 pub struct Link {
+    counts: LoadCounts,
     socket: UdpSocket,
 }
 
@@ -57,6 +58,20 @@ pub struct NetFtApi2 {
     pub buffered_size: u8,
 }
 
+pub struct LoadCounts {
+    force: f32,
+    torque: f32,
+}
+
+impl From<&NetFtApi2> for LoadCounts {
+    fn from(config: &NetFtApi2) -> Self {
+        Self {
+            force: config.force_counts as f32,
+            torque: config.torque_counts as f32,
+        }
+    }
+}
+
 /* === Implementations === */
 
 impl Link {
@@ -66,35 +81,33 @@ impl Link {
 
     const API_PATH: &str = "/netftapi2.xml";
 
-    pub fn new(socket: UdpSocket) -> Self {
-        Self { socket }
+    pub fn new(counts: LoadCounts, socket: UdpSocket) -> Self {
+        Self { counts, socket }
     }
 
-    pub async fn receive_loads(
-        &self,
-        buf: &mut Vec<u8>,
-        output: &mut Vec<f32>,
-        config: &NetFtApi2,
-    ) -> Result<usize> {
+    pub async fn receive_loads<'a>(
+        &'a self,
+        buf: &'a mut Vec<u8>,
+    ) -> Result<impl ExactSizeIterator<Item = Load> + 'a> {
         buf.clear();
-        output.clear();
 
         self.socket.recv_buf(buf).await?;
 
-        let buf = &mut &buf[..];
-        let mut count = 0;
+        // Ensure the buffer is the correct multiple of message bytes
+        debug_assert_eq!(buf.len() % Message::SIZE_B, 0,);
 
-        while buf.has_remaining() {
-            let message = Message::decode(&mut &buf[..])?;
-            let mut load = message.load(config.force_counts, config.torque_counts);
+        // Number of messages in the buffer
+        let count = buf.len() / Message::SIZE_B;
 
-            Self::fix_orientation(&mut load);
+        // Iterate over each 6-f32 window and decode a load
+        Ok((0..count).map(move |i| {
+            let start = i * Message::SIZE_B;
+            let end = start + Message::SIZE_B;
 
-            output.extend_from_slice(&load.array());
-            count += 1;
-        }
-
-        Ok(count)
+            Message::decode(&mut &buf[start..end])
+                .expect("Malformed load cell message")
+                .load(&self.counts)
+        }))
     }
 
     pub async fn send_instruction(&self, instruction: Instruction) -> io::Result<()> {
@@ -140,13 +153,6 @@ impl Link {
 
         Ok(())
     }
-
-    /// The datasheet specifies the X axis point towards the back of the device on the tool
-    /// side. This function swaps the X and Y axes of the force and moment vectors.
-    fn fix_orientation(load: &mut Load) {
-        (load.force.x, load.force.y) = (load.force.y, -load.force.x);
-        (load.moment.x, load.moment.y) = (load.moment.y, -load.moment.x);
-    }
 }
 
 impl Request {
@@ -177,6 +183,10 @@ impl Instruction {
     }
 }
 
+impl Message {
+    pub const SIZE_B: usize = 36; // u32 (3x) + i32 (6x)
+}
+
 impl Decode for Message {
     fn decode<B: Buf>(buf: &mut B) -> Result<Self, DecodeError> {
         let _rdt_sequence = buf.try_get_u32()?;
@@ -194,12 +204,12 @@ impl Decode for Message {
 }
 
 impl Message {
-    pub fn load(&self, force_counts: u32, moment_counts: u32) -> Load {
+    pub fn load(&self, load_counts: &LoadCounts) -> Load {
         let [fx, fy, fz, mx, my, mz] = self.load.map(|v| v as f32);
 
         Load {
-            force: Vector3::new(fx, fy, fz) / force_counts as f32,
-            moment: Vector3::new(mx, my, mz) / moment_counts as f32,
+            force: Vector3::new(fx, fy, fz) / load_counts.force,
+            moment: Vector3::new(mx, my, mz) / load_counts.torque,
         }
     }
 }

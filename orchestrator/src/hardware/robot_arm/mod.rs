@@ -1,4 +1,6 @@
 use std::{
+    array,
+    f32::consts::PI,
     fmt,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -7,6 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use eyre::{Report, Result, bail};
+use nalgebra::{Isometry3, Point3, Vector3};
 use thiserror::Error;
 use tokio::{
     net::UdpSocket,
@@ -39,6 +42,7 @@ pub struct RobotArm {
 }
 
 struct Inner {
+    bounds: Option<Bounds>,
     error: watch::Sender<Option<RobotError>>,
     shared: Mutex<Shared>,
     socket: UdpSocket,
@@ -49,12 +53,15 @@ struct Inner {
 struct Shared {
     ack: Option<(u8, oneshot::Sender<()>)>,
     command_counter: u8,
-    origin: Point,
+    origin_transform: Isometry3<f32>,
     stream: Option<StreamWriter>,
 }
 
 #[derive(Copy, Clone, Debug, Error)]
 pub enum RobotError {
+    #[error("Collision detected")]
+    Collision,
+
     #[error("Robot unreachable")]
     Unreachable,
 
@@ -78,7 +85,7 @@ impl RobotArm {
     const HANDSHAKE_REQUEST_ID: u8 = 0;
     const MAX_SETTLE: Duration = Duration::from_millis(100);
 
-    pub async fn try_new(ip: IpAddr, port: u16) -> Result<RobotArm> {
+    pub async fn try_new(ip: IpAddr, port: u16, bounds: Option<Bounds>) -> Result<RobotArm> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
         socket.connect((ip, port)).await?;
 
@@ -87,9 +94,9 @@ impl RobotArm {
         let (error, _) = watch::channel(None);
         let (state, _) = watch::channel(None);
 
-        let inner = Arc::new(Inner::new(error, socket, state));
+        let inner = Arc::new(Inner::new(bounds, error, socket, state));
         let receiver = tokio::spawn(Self::receiver_task(inner.clone()));
-        let watchdog = tokio::spawn(Self::watchdog_task(inner.clone()));
+        let watchdog = tokio::spawn(Self::collision_task(inner.clone()));
 
         Ok(RobotArm {
             inner,
@@ -99,7 +106,7 @@ impl RobotArm {
     }
 
     pub async fn try_new_from_config(config: &RobotArmConfig) -> Result<Self> {
-        Self::try_new(config.ip, config.port).await
+        Self::try_new(config.ip, config.port, config.bounds).await
     }
 
     async fn handshake(socket: &UdpSocket) -> Result<()> {
@@ -132,7 +139,10 @@ impl RobotArm {
             Command::Remote(instruction) => self.instruction(instruction).await,
 
             Command::SetOrigin(point) => {
-                self.inner.shared.lock().await.origin = point;
+                let isometry = Isometry3::from(point);
+
+                self.inner.shared.lock().await.origin_transform = isometry.inverse();
+
                 Ok(())
             }
 
@@ -188,8 +198,18 @@ impl RobotArm {
                     let _ = inner.error.send(Some(RobotError::PoweredOff));
                 }
 
-                Response::State(state) => {
-                    if let Some(stream) = &inner.shared.lock().await.stream {
+                Response::State(mut state) => {
+                    // Swap the X/Y axis to match the drone's coordinate system
+                    Self::tool_to_drone_frame(&mut state.position);
+
+                    let lock = inner.shared.lock().await;
+
+                    // Subtract the stored origin transform for relative positioning
+                    let isometry = Isometry3::from(state.position);
+                    let transformed = lock.origin_transform * isometry;
+                    state.position = Point::from(transformed);
+
+                    if let Some(stream) = &lock.stream {
                         stream.add(now, &state.position.array()).await;
                     }
 
@@ -199,9 +219,38 @@ impl RobotArm {
         }
     }
 
-    async fn watchdog_task(_inner: Arc<Inner>) -> Result<()> {
-        tracing::warn!("Watchdog not implemented!");
-        Ok(())
+    async fn collision_task(inner: Arc<Inner>) -> Result<()> {
+        let Some(bounds) = inner.bounds else {
+            tracing::warn!("Robot bounds not set, watchdog inactive");
+            return Ok(());
+        };
+
+        let mut channel = inner.state.subscribe();
+
+        loop {
+            // Subscribe to the state channel and wait for a position
+            // that collides with the bounds
+            channel
+                .wait_for(|state| {
+                    state
+                        .as_ref()
+                        .is_some_and(|state| bounds.collision_x(&state.position))
+                })
+                .await?;
+
+            tracing::error!("Robot collision detected, halting");
+            let mut buf = Vec::with_capacity(Self::BUFFER_SIZE);
+
+            // Immediately halt the robot, engaging the brakes
+            let request_id = inner.shared.lock().await.next_id();
+            Request::new(request_id, Instruction::Halt(false)).encode(&mut buf);
+
+            inner.socket.send(&buf).await?;
+
+            // Set the error state and wait for it to be cleared
+            inner.error.send_replace(Some(RobotError::Collision));
+            inner.error.subscribe().wait_for(Option::is_some).await?;
+        }
     }
 
     /* == Miscellaneous == */
@@ -258,6 +307,16 @@ impl RobotArm {
 
         (request_id, ack_rx)
     }
+
+    /// Convert the robot's mm/deg -> m/rad units, while rotating 90 degrees
+    /// counter-clockwise around the z-axis to match the drone's coordinate system.
+    fn tool_to_drone_frame(point: &mut Point) {
+        point.position *= 1e-3; // mm -> m
+        point.orientation *= PI / 180.; // deg -> rad
+
+        (point.position.x, point.position.y) = (point.position.y, -point.position.x);
+        (point.orientation.x, point.orientation.y) = (point.orientation.y, -point.orientation.x);
+    }
 }
 
 #[async_trait]
@@ -309,6 +368,7 @@ impl Drop for RobotArm {
 
 impl Inner {
     pub fn new(
+        bounds: Option<Bounds>,
         error: watch::Sender<Option<RobotError>>,
         socket: UdpSocket,
         state: watch::Sender<Option<State>>,
@@ -316,6 +376,7 @@ impl Inner {
         let shared = Mutex::new(Shared::default());
 
         Inner {
+            bounds,
             error,
             shared,
             socket,
@@ -328,5 +389,86 @@ impl Shared {
     fn next_id(&mut self) -> u8 {
         self.command_counter = self.command_counter.wrapping_add(1);
         self.command_counter
+    }
+}
+
+impl Bounds {
+    pub fn collision_x(&self, origin: &Point) -> bool {
+        let isometry = Isometry3::from_parts(origin.position.into(), origin.quaternion());
+
+        self.iter_vertices()
+            .iter()
+            .any(|v| (isometry * v).x >= self.wall_distance_x)
+    }
+
+    fn iter_vertices(&self) -> [Point3<f32>; 8] {
+        Self::sign_permutations().map(|v| Point3::from(v.component_mul(&self.size)))
+    }
+
+    fn sign_permutations() -> [Vector3<f32>; 8] {
+        array::from_fn(|i| Vector3::new(Self::bit(i, 0), Self::bit(i, 1), Self::bit(i, 2)))
+    }
+
+    #[inline(always)]
+    const fn bit(value: usize, bit: u8) -> f32 {
+        if value & (1 << bit) == 0 { 1.0 } else { -1.0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::f32::consts::*;
+
+    use super::*;
+
+    #[test]
+    fn test_sign_permutations() {
+        let result = Bounds {
+            size: Vector3::new(1., 2., 3.),
+            wall_distance_x: 0.,
+        }
+        .iter_vertices()
+        .map(|v| v.coords.data.0[0]);
+
+        assert_eq!(
+            result,
+            [
+                [1., 2., 3.],
+                [-1., 2., 3.],
+                [1., -2., 3.],
+                [-1., -2., 3.],
+                [1., 2., -3.],
+                [-1., 2., -3.],
+                [1., -2., -3.],
+                [-1., -2., -3.]
+            ]
+        );
+    }
+
+    #[test]
+    fn collisions() {
+        let bounds = Bounds {
+            wall_distance_x: 2.,
+            size: Vector3::new(1., 2., 20.),
+        };
+
+        let cases = [
+            (0., 0., false),
+            (0.99, 0., false),
+            (1.01, 0., true),
+            (-0.13, FRAC_PI_4, false),
+            (-0.12, FRAC_PI_4, true),
+        ];
+
+        for (x, rz, collision) in cases {
+            assert_eq!(
+                bounds.collision_x(&Point::new(x, 0., 0., 0., 0., rz)),
+                collision,
+                "Collision check failed for x: {}, rz: {}",
+                x,
+                rz
+            );
+        }
     }
 }

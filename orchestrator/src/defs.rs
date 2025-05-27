@@ -1,11 +1,15 @@
 use bytes::{Buf, BufMut};
-use nalgebra::{UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, UnitQuaternion, Vector3};
 use serde::{Deserialize, Serialize};
 
 use crate::misc::buf::{Decode, DecodeError, Encode};
 
+pub const G: f32 = 9.80665;
+
 /* == Points == */
 
+/// Represents a point in 3D space with a position and an orientation, given as
+/// Euler angles (roll, pitch, yaw) in radians.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub position: Vector3<f32>,
@@ -13,7 +17,7 @@ pub struct Point {
 }
 
 impl Point {
-    pub const CHANNELS: [&str; Self::WIDTH] = ["x", "y", "z", "rol", "pitch", "yaw"];
+    pub const CHANNELS: [&str; Self::WIDTH] = ["x", "y", "z", "roll", "pitch", "yaw"];
     pub const WIDTH: usize = 6;
 
     pub const ZERO: Self = Self {
@@ -33,6 +37,11 @@ impl Point {
             position: Vector3::new(x, y, z),
             orientation: Vector3::new(0., 0., 0.),
         }
+    }
+
+    pub fn quaternion(&self) -> UnitQuaternion<f32> {
+        let o = &self.orientation;
+        UnitQuaternion::from_euler_angles(o.x, o.y, o.z)
     }
 
     pub const fn array(&self) -> [f32; Self::WIDTH] {
@@ -70,6 +79,24 @@ impl From<&[f32; Self::WIDTH]> for Point {
         Point {
             position: Vector3::new(fx, fy, fz),
             orientation: Vector3::new(ox, oy, oz),
+        }
+    }
+}
+
+impl From<Point> for Isometry3<f32> {
+    fn from(value: Point) -> Self {
+        Isometry3::from_parts(value.position.into(), value.quaternion())
+    }
+}
+
+impl From<Isometry3<f32>> for Point {
+    fn from(value: Isometry3<f32>) -> Self {
+        let position = value.translation.vector;
+        let orientation = value.rotation.euler_angles();
+
+        Point {
+            position: Vector3::new(position.x, position.y, position.z),
+            orientation: Vector3::new(orientation.0, orientation.1, orientation.2),
         }
     }
 }

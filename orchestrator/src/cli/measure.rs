@@ -8,19 +8,15 @@ use tokio::time::sleep;
 use crate::{
     config::{Config, HardwareConfig},
     data::{experiment::Run, processing::StreamFilter, sink::DataSink},
-    defs::{Load, Point},
+    defs::{G, Load, Point},
     hardware::{
         HardwareContext,
         load_cell::LoadCell,
-        robot_arm::{
-            defs::Instruction as RI,
-            defs::{ArmConfig, Motion, MotionKind, Profile},
-        },
+        robot_arm::defs::{ArmConfig, Instruction as RI, Motion, MotionKind, Profile},
     },
     misc::data::deinterleave_data,
 };
 
-const G: f32 = 9.80665;
 const CUTOFF_FREQUENCY: f32 = 5.0;
 
 #[derive(Clone, Debug, Parser)]

@@ -165,7 +165,7 @@ struct RobotArmOpts {
 async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     tracing::info!("Connecting to robot arm");
 
-    let mut robot = RobotArm::try_new(opts.ip, opts.port)
+    let mut robot = RobotArm::try_new(opts.ip, opts.port, None)
         .await
         .wrap_err("Failed to connect to RobotArm")?;
 

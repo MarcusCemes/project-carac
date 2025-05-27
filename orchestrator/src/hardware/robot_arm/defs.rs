@@ -1,5 +1,6 @@
 use bytes::{Buf, BufMut};
 use eyre::Result;
+use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use strum::EnumDiscriminants;
 
@@ -25,6 +26,14 @@ enum ArmConfigKind {
     Same,
     RightlyPositive,
     LeftNegative,
+}
+
+/* == Bounds == */
+
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub struct Bounds {
+    pub size: Vector3<f32>,
+    pub wall_distance_x: f32,
 }
 
 /* == Blending == */

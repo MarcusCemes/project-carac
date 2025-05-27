@@ -7,12 +7,15 @@ use std::{
 use async_trait::async_trait;
 use defs::Command;
 use eyre::Result;
-use protocol::{Instruction, Link, NetFtApi2};
+use protocol::{Instruction, Link, LoadCounts, NetFtApi2};
 use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle, time::Instant};
 
 use crate::{
     config::LoadCellConfig,
-    data::sink::{DataSinkBuilder, StreamWriter},
+    data::{
+        processing::LoadTransform,
+        sink::{DataSinkBuilder, StreamWriter},
+    },
     defs::Load,
     hardware::HardwareAgent,
 };
@@ -23,6 +26,7 @@ mod protocol;
 const PORT: u16 = 49152;
 
 pub struct LoadCell {
+    buffered_streaming: bool,
     inner: Arc<Inner>,
     task: JoinHandle<Result<()>>,
 }
@@ -35,6 +39,7 @@ struct Inner {
 
 #[derive(Default)]
 struct Shared {
+    transform: LoadTransform,
     stream: Option<StreamWriter>,
 }
 
@@ -51,7 +56,7 @@ impl LoadCell {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
         socket.connect((ip, PORT)).await?;
 
-        let link = Link::new(socket);
+        let link = Link::new(LoadCounts::from(&config), socket);
 
         let inner = Arc::new(Inner {
             config,
@@ -59,24 +64,34 @@ impl LoadCell {
             shared: Mutex::new(Shared::default()),
         });
 
+        let buffered_streaming = true;
         let task = tokio::spawn(Self::load_cell_task(inner.clone()));
 
-        Ok(LoadCell { inner, task })
+        Ok(LoadCell {
+            buffered_streaming,
+            inner,
+            task,
+        })
     }
 
     pub async fn try_new_from_config(config: &LoadCellConfig) -> Result<Self> {
-        let load_cell = Self::try_new(config.ip).await?;
+        let mut load_cell = Self::try_new(config.ip).await?;
 
-        if config.update_settings {
+        load_cell.buffered_streaming = config.buffered_streaming;
+
+        if config.configure_device {
             load_cell.update_settings().await?;
+        }
+
+        if let Some(point) = config.transform {
+            tracing::info!("Using configuration load cell transform");
+            load_cell.inner.shared.lock().await.transform = LoadTransform::new(&point);
         }
 
         Ok(load_cell)
     }
 
     pub async fn update_settings(&self) -> Result<()> {
-        tracing::info!("Updating load cell settings...");
-
         for (page, variables) in [
             ("setting", [("setuserfilter", "0")].as_slice()),
             (
@@ -110,6 +125,8 @@ impl LoadCell {
                 .await?;
         }
 
+        tracing::info!("Remote load cell settings updated");
+
         Ok(())
     }
 
@@ -117,6 +134,10 @@ impl LoadCell {
         match command {
             Command::SetBias => {
                 self.inner.instruction(Instruction::SetBias).await?;
+            }
+
+            Command::SetTransform(point) => {
+                self.inner.shared.lock().await.transform = LoadTransform::new(&point);
             }
         }
 
@@ -130,21 +151,49 @@ impl LoadCell {
         let mut channel_data = Vec::new();
 
         loop {
-            inner
-                .link
-                .receive_loads(&mut buf, &mut channel_data, &inner.config)
-                .await?;
+            // Receives a packet and creates an iterator of decoded loads
+            let iter_loads = inner.link.receive_loads(&mut buf).await?;
 
             let now = Instant::now();
-
             let lock = inner.shared.lock().await;
 
             if let Some(stream) = &lock.stream {
-                stream
-                    .add_many(now, inner.config.output_rate as f32, &channel_data)
-                    .await;
+                // 1. Correct the orientation of the load vector (tool side)
+                // 2. Apply the force/moment transform to the desired centre of mass
+                let mut iter_loads = iter_loads.map(|mut load| {
+                    LoadCell::adjust_load_orientation(&mut load);
+                    lock.transform.apply(&load)
+                });
+
+                match iter_loads.len() {
+                    0 => panic!("No loads"),
+
+                    1 => stream.add(now, &iter_loads.next().unwrap().array()).await,
+
+                    _ => {
+                        channel_data.clear();
+
+                        for load in iter_loads {
+                            channel_data.extend_from_slice(&load.array());
+                        }
+
+                        stream
+                            .add_many(now, inner.config.output_rate as f32, &channel_data)
+                            .await;
+                    }
+                }
             }
         }
+    }
+
+    /* == Other == */
+
+    /// Transforms the load vector from the device's coordinate system (X axis pointing
+    /// towards the back of the device) into the drone's coordinate system, by rotating
+    /// clockwise by 90 degrees around the Z axis.
+    fn adjust_load_orientation(load: &mut Load) {
+        (load.force.x, load.force.y) = (-load.force.y, load.force.x);
+        (load.moment.x, load.moment.y) = (-load.moment.y, load.moment.x);
     }
 }
 
@@ -163,7 +212,12 @@ impl HardwareAgent for LoadCell {
     }
 
     async fn start(&mut self) {
-        let _ = self.inner.instruction(Instruction::StartBuffered).await;
+        let instruction = match self.buffered_streaming {
+            true => Instruction::StartBuffered,
+            false => Instruction::StartStreaming,
+        };
+
+        let _ = self.inner.instruction(instruction).await;
     }
 
     async fn stop(&mut self) {

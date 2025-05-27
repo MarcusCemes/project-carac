@@ -26,7 +26,7 @@ pub struct Orchestrator {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Instruction {
-    LoadCell(LoadCommand),
+    Load(LoadCommand),
     Robot(RobotCommand),
     Wind(WindCommand),
     BiasAll,
@@ -116,7 +116,7 @@ impl Orchestrator {
 
     async fn instruction(&mut self, instruction: Instruction) -> Result<()> {
         match instruction {
-            Instruction::LoadCell(command) => {
+            Instruction::Load(command) => {
                 require_agent(&mut self.context.load_cell)?
                     .command(command)
                     .await?;

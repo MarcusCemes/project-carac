@@ -8,18 +8,21 @@ use eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::fs::read;
 
-use crate::misc::{ColourDot, serde::deserialize_null_to_default};
+use crate::{
+    defs::Point,
+    hardware::robot_arm::defs::Bounds as RobotArmBounds,
+    misc::{ColourDot, serde::deserialize_null_to_default},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
-#[serde(default)]
 pub struct Config {
     pub hardware: HardwareConfig,
     pub sink: SinkConfig,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HardwareConfig {
-    #[serde(default)]
     pub additional_devices: Vec<DeviceConfig>,
     pub load_cell: Option<LoadCellConfig>,
     pub motion_capture: Option<MotionCaptureConfig>,
@@ -30,8 +33,15 @@ pub struct HardwareConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadCellConfig {
     pub ip: IpAddr,
+
     #[serde(default = "LoadCellConfig::update_settings")]
-    pub update_settings: bool,
+    pub configure_device: bool,
+
+    #[serde(default = "LoadCellConfig::buffered_streaming")]
+    pub buffered_streaming: bool,
+
+    #[serde(default)]
+    pub transform: Option<Point>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,8 +59,12 @@ pub struct MotionCaptureConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RobotArmConfig {
     pub ip: IpAddr,
+
     #[serde(default = "RobotArmConfig::port")]
     pub port: u16,
+
+    #[serde(default)]
+    pub bounds: Option<RobotArmBounds>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +76,7 @@ pub struct WindShapeConfig {
 #[serde(default)]
 pub struct SinkConfig {
     pub disable_audio: bool,
+    pub mass: Option<f32>,
     pub session_path: Option<PathBuf>,
 
     #[serde(deserialize_with = "deserialize_null_to_default")]
@@ -99,6 +114,10 @@ impl Default for PlotJugglerConfig {
 
 impl LoadCellConfig {
     const fn update_settings() -> bool {
+        true
+    }
+
+    const fn buffered_streaming() -> bool {
         true
     }
 }

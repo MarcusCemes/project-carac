@@ -116,7 +116,7 @@ class SetBias(Serializable):
 
 
 @dataclass
-class LoadCell(Serializable):
+class Load(Serializable):
     type: SetBias
 
 
@@ -172,7 +172,7 @@ class GoHome(Serializable):
 
 
 @dataclass
-class RobotArm(Serializable):
+class Robot(Serializable):
     type: (
         Move
         | GoHome
@@ -200,7 +200,7 @@ class SetWindSpeed(Serializable):
 
 
 @dataclass
-class WindShape(Serializable):
+class Wind(Serializable):
     type: EnablePower | SetWindSpeed
 
 
@@ -229,4 +229,4 @@ class Reset(Serializable):
     pass
 
 
-Instruction = LoadCell | RobotArm | WindShape | BiasAll | Sleep | Reset
+Instruction = Load | Robot | Wind | BiasAll | Sleep | Reset

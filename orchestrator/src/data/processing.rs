@@ -5,7 +5,7 @@ use eyre::{ContextCompat, Result};
 use nalgebra::{Rotation3, Vector3};
 use polars::prelude::*;
 
-use crate::defs::Load;
+use crate::defs::{Load, Point};
 
 use super::{
     experiment::{RecordedStream, Run, RunSample, RunSampleIterator},
@@ -313,18 +313,19 @@ impl StreamFilter {
 
 /* == LoadTransform == */
 
-struct LoadTransform {
+#[derive(Debug, Clone, Default)]
+pub struct LoadTransform {
     rotation: Rotation3<f32>,
     translation: Vector3<f32>,
 }
 
 impl LoadTransform {
-    pub fn new(translation: Vector3<f32>, rotation: Vector3<f32>) -> Self {
-        let rotation = Rotation3::from_euler_angles(rotation.x, rotation.y, rotation.z);
+    pub fn new(point: &Point) -> Self {
+        let o = &point.orientation;
 
         Self {
-            rotation,
-            translation,
+            rotation: Rotation3::from_euler_angles(o.x, o.y, o.z),
+            translation: point.position,
         }
     }
 

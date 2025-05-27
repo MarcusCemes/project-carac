@@ -30,27 +30,27 @@ def main():
 def init() -> list[Instruction]:
     return [
         Reset(),
-        WindShape(SetWindSpeed(0)),
-        WindShape(EnablePower(True)),
-        RobotArm(SetProfile(SLOW_PROFILE)),
-        RobotArm(GoHome()),
-        RobotArm(WaitSettled()),
-        RobotArm(SetBlending(Blending())),
-        RobotArm(SetProfile(FAST_PROFILE)),
-        RobotArm(SetConfig(WORKING_CONFIG)),
-        RobotArm(SetOffset(LOAD_CELL_OFFSET)),
-        RobotArm(Move(MotionDirect(WORKING_POINT))),
-        RobotArm(WaitSettled()),
-        RobotArm(SetReportInterval(0.01)),
+        Wind(SetWindSpeed(0)),
+        Wind(EnablePower(True)),
+        Robot(SetProfile(SLOW_PROFILE)),
+        Robot(GoHome()),
+        Robot(WaitSettled()),
+        Robot(SetBlending(Blending())),
+        Robot(SetProfile(FAST_PROFILE)),
+        Robot(SetConfig(WORKING_CONFIG)),
+        Robot(SetOffset(LOAD_CELL_OFFSET)),
+        Robot(Move(MotionDirect(WORKING_POINT))),
+        Robot(WaitSettled()),
+        Robot(SetReportInterval(0.01)),
     ]
 
 
 def finalise() -> list[Instruction]:
     return [
-        RobotArm(GoHome()),
-        WindShape(SetWindSpeed(0)),
-        WindShape(EnablePower(False)),
-        RobotArm(WaitSettled()),
+        Robot(GoHome()),
+        Wind(SetWindSpeed(0)),
+        Wind(EnablePower(False)),
+        Robot(WaitSettled()),
     ]
 
 
@@ -73,11 +73,11 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
     print("Biasing...")
     o.execute(
         [
-            RobotArm(Move(MotionLinear(WORKING_POINT))),
-            RobotArm(WaitSettled()),
+            Robot(Move(MotionLinear(WORKING_POINT))),
+            Robot(WaitSettled()),
             Sleep(1),
-            LoadCell(SetBias()),
-            RobotArm(Move(MotionLinear(through_pose))),
+            Load(SetBias()),
+            Robot(Move(MotionLinear(through_pose))),
         ]
     )
 
@@ -85,7 +85,7 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
         print("Stabilising wind...")
         o.execute(
             [
-                WindShape(SetWindSpeed(wind_speed)),
+                Wind(SetWindSpeed(wind_speed)),
                 Sleep(5),
             ]
         )
@@ -94,10 +94,10 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
         print("Moving to start position...")
         o.execute(
             [
-                RobotArm(WaitSettled()),
+                Robot(WaitSettled()),
                 instruction_from,
-                RobotArm(WaitSettled()),
-                RobotArm(SetProfile(profile)),
+                Robot(WaitSettled()),
+                Robot(SetProfile(profile)),
             ]
         )
 
@@ -105,15 +105,15 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
         o.record(
             [
                 *instructions_to,
-                RobotArm(WaitSettled()),
+                Robot(WaitSettled()),
             ]
         )
 
         print("Complete.")
         o.execute(
             [
-                RobotArm(SetProfile(FAST_PROFILE)),
-                RobotArm(Move(MotionLinear(through_pose))),
+                Robot(SetProfile(FAST_PROFILE)),
+                Robot(Move(MotionLinear(through_pose))),
             ]
         )
 
@@ -121,7 +121,7 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
         print("Turning off wind...")
         o.execute(
             [
-                WindShape(SetWindSpeed(0)),
+                Wind(SetWindSpeed(0)),
                 Sleep(10),
             ]
         )
@@ -140,10 +140,10 @@ def point_rotation(
     a = offset * sin(alpha)
     b = offset * cos(alpha)
 
-    f = RobotArm(Move(MotionLinear(point.add(Point(y=b, z=a, rx=half_angle)))))
+    f = Robot(Move(MotionLinear(point.add(Point(y=b, z=a, rx=half_angle)))))
 
     t = [
-        RobotArm(
+        Robot(
             Move(
                 MotionCircular(
                     point.add(Point(z=-offset)),
@@ -158,13 +158,13 @@ def point_rotation(
 
 def axis_rotation(point: Point, angle: float = SWEEP_ANGLE):
     half_angle = angle / 2
-    f = RobotArm(Move(MotionLinear(point.add(Point(rx=half_angle)))))
+    f = Robot(Move(MotionLinear(point.add(Point(rx=half_angle)))))
 
     t = [
-        RobotArm(SetBlending(Blending(1, 1, 1))),
-        RobotArm(Move(MotionLinear(point))),
-        RobotArm(SetBlending(Blending())),
-        RobotArm(Move(MotionLinear(point.add(Point(rx=-half_angle))))),
+        Robot(SetBlending(Blending(1, 1, 1))),
+        Robot(Move(MotionLinear(point))),
+        Robot(SetBlending(Blending())),
+        Robot(Move(MotionLinear(point.add(Point(rx=-half_angle))))),
     ]
 
     return (f, t)
