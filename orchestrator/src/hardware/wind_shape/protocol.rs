@@ -14,6 +14,7 @@ use super::{WindShape, defs::Status};
 /* === Definitions === */
 
 pub struct Link {
+    ip: IpAddr,
     socket: UdpSocket,
 }
 
@@ -51,19 +52,19 @@ impl Link {
 
     const HANDSHAKE_CLIENT_ID: u8 = 0;
 
-    pub async fn try_new(ip: IpAddr, remote_port: u16, local_port: u16) -> Result<Self> {
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, local_port)).await?;
+    pub async fn try_new(ip: IpAddr) -> Result<Self> {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, WindShape::LOCAL_PORT)).await?;
 
-        socket.connect((ip, remote_port)).await?;
-
-        Ok(Self { socket })
+        Ok(Self { ip, socket })
     }
 
     pub async fn send_request(&self, request: Request) -> Result<()> {
         let mut buf = Vec::with_capacity(Self::TX_BUFFER_SIZE);
 
         request.encode(&mut buf);
-        self.socket.send(&buf).await?;
+        self.socket
+            .send_to(&buf, (self.ip, WindShape::REMOTE_PORT))
+            .await?;
 
         Ok(())
     }

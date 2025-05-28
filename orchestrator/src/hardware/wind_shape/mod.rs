@@ -75,7 +75,7 @@ impl WindShape {
     }
 
     pub async fn connect(ip: IpAddr) -> Result<WindShape> {
-        let link = Link::try_new(ip, Self::REMOTE_PORT, Self::LOCAL_PORT).await?;
+        let link = Link::try_new(ip).await?;
 
         let client_id = link.handshake().await?;
 
@@ -138,7 +138,7 @@ impl WindShape {
                 .await
                 .expect("WindShape receiver task died");
 
-            if self.status.borrow().in_control == value {
+            if self.status.borrow_and_update().in_control == value {
                 break;
             }
         }
@@ -239,13 +239,13 @@ impl WindShape {
             let now = Instant::now();
 
             let set_speed = inner.state.fan_speed.load(Ordering::Relaxed);
-            fan.update(set_speed, timer.period());
+            let speed = fan.update(set_speed, timer.period());
 
-            let _ = inner.virtual_speed.send_replace(fan.0);
+            let _ = inner.virtual_speed.send_replace(speed);
 
             if let Ok(shared) = inner.shared.try_lock() {
                 if let Some(stream) = shared.stream.as_ref() {
-                    let virtual_speed = fan.0 as f32 / 100.;
+                    let virtual_speed = speed as f32 / 100.;
                     stream.add(now, &[virtual_speed]).await;
                 }
             }
@@ -303,19 +303,22 @@ impl Inner {
 struct VirtualFan(u8);
 
 impl VirtualFan {
-    const FAN_CHANGE_RATE: u8 = 5;
+    const FAN_CHANGE_RATE: u8 = 10;
 
     pub fn new() -> Self {
         VirtualFan::default()
     }
 
     pub fn update(&mut self, target: u8, delta: Duration) -> u8 {
+        let target = target.min(100);
+
         let delta = (delta.as_secs_f32() * Self::FAN_CHANGE_RATE as f32).round() as u8;
 
-        self.0 = (self.0)
-            .saturating_add(if target > self.0 { delta } else { 0 })
-            .saturating_sub(if target < self.0 { delta } else { 0 })
-            .clamp(0, 100);
+        if target > self.0 {
+            self.0 = self.0.saturating_add(delta).min(target);
+        } else if target < self.0 {
+            self.0 = self.0.saturating_sub(delta);
+        }
 
         self.0
     }

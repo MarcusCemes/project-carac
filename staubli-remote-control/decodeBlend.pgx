@@ -22,7 +22,7 @@
   value.leave = decodeBuffer[0]
   value.reach = decodeBuffer[1]
 
-  logMsg("B: (" + toString("", value.blend) + ", " + toString("", value.leave) + ", " + toString("", value.reach) + ")")
+  logMsg("B: (" + toString("", buffer[0]) + ", " + toString("", value.leave) + ", " + toString("", value.reach) + ")")
 end
 ]]></Code>
   </Program>

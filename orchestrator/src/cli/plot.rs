@@ -15,8 +15,8 @@ use crate::data::{
     sink::StreamInfo,
 };
 
-const HEIGHT: u32 = 1800;
-const WIDTH: u32 = 800;
+const HEIGHT: u32 = 800;
+const WIDTH: u32 = 1800;
 
 const PLOTS_DIR: &str = "plots";
 
@@ -29,6 +29,9 @@ pub struct PlotOpts {
 
     #[clap(short, long)]
     cutoff_frequency: Option<f32>,
+
+    #[clap(long, default_value_t = 1)]
+    order: usize,
 
     #[clap(long)]
     only_streams: Option<Vec<String>>,
@@ -52,7 +55,9 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
 
     tracing::info!("Found {} experiments", experiments.len());
 
-    let filter = opts.cutoff_frequency.map(|f| StreamFilter::new(f as f64));
+    let filter = opts
+        .cutoff_frequency
+        .map(|f| StreamFilter::new(f as f64, opts.order));
     let streams = &session.metadata().streams;
 
     let bar = ProgressBar::new(0);

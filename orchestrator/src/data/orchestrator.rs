@@ -43,6 +43,8 @@ impl Orchestrator {
         let (sink, streams) = DataSink::builder().with_context(&mut context).await.build();
 
         if let Some(config) = config.sink.plot_juggler {
+            tracing::info!("Enabling PlotJuggler broadcasting");
+
             let try_broadcaster = PlotJugglerBroadcaster::builder()
                 .with_config(&config)
                 .build();
@@ -56,6 +58,7 @@ impl Orchestrator {
             .then_some(())
             .and_then(|_| AudioPlayer::try_new().ok());
 
+        tracing::info!("Creating session");
         let session = Session::open(path, streams).await?;
 
         Ok(Self {
@@ -68,12 +71,14 @@ impl Orchestrator {
 
     pub async fn start(&mut self) {
         for device in self.context.iter_mut() {
+            tracing::debug!("Starting agent {device}");
             device.start().await;
         }
     }
 
     pub async fn stop(&mut self) {
         for device in self.context.iter_mut() {
+            tracing::debug!("Stopping agent {device}");
             device.stop().await;
         }
     }
@@ -115,6 +120,8 @@ impl Orchestrator {
     }
 
     async fn instruction(&mut self, instruction: Instruction) -> Result<()> {
+        tracing::trace!("Executing {instruction:?}");
+
         match instruction {
             Instruction::Load(command) => {
                 require_agent(&mut self.context.load_cell)?
@@ -129,6 +136,14 @@ impl Orchestrator {
             }
 
             Instruction::Wind(command) => {
+                if let WindCommand::SetFanSpeed(speed) = &command {
+                    if *speed > 0. {
+                        if let Some(audio) = self.audio.as_ref() {
+                            let _ = audio.queue(AudioFile::Double);
+                        }
+                    }
+                }
+
                 require_agent(&mut self.context.wind_shape)?
                     .command(command)
                     .await?;

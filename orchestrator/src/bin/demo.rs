@@ -12,7 +12,7 @@ use drone_lab::{
         example_counter::ExampleCounter,
         robot_arm::{
             RobotArm,
-            defs::Instruction as RI,
+            defs::Command as RC,
             defs::{Motion, MotionKind, Profile, ProfileLimit, ProfileScale},
         },
         wind_shape::WindShape,
@@ -22,7 +22,7 @@ use drone_lab::{
 
 macro_rules! movel {
     ($robot:expr, $point:expr) => {
-        $robot.instruction(RI::Move(Motion::Linear($point))).await?;
+        $robot.instruction(RC::Move(Motion::Linear($point))).await?;
     };
 }
 
@@ -176,8 +176,8 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
 
     let mut profile = Profile::builder().with_smoothing(20).build();
 
-    robot.instruction(RI::SetToolOffset(offset)).await?;
-    robot.instruction(RI::SetProfile(profile)).await?;
+    robot.instruction(RC::SetToolOffset(offset)).await?;
+    robot.instruction(RC::SetProfile(profile)).await?;
     movel!(robot, point);
     settle!(robot);
 
@@ -188,8 +188,8 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     offset.position.z = 100.;
     profile.scale = ProfileScale::default();
 
-    robot.instruction(RI::SetToolOffset(offset)).await?;
-    robot.instruction(RI::SetProfile(profile)).await?;
+    robot.instruction(RC::SetToolOffset(offset)).await?;
+    robot.instruction(RC::SetProfile(profile)).await?;
 
     movel!(robot, point);
     settle!(robot);
@@ -207,7 +207,7 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     settle!(robot);
 
     offset.position.z = 0.;
-    robot.instruction(RI::SetToolOffset(offset)).await?;
+    robot.instruction(RC::SetToolOffset(offset)).await?;
 
     point.position.x = 500.;
     point.position.x = 500.;
@@ -218,7 +218,7 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     profile.scale.acceleration = 15;
     profile.scale.deceleration = 15;
     profile.limit.rotation = 30.;
-    robot.instruction(RI::SetProfile(profile)).await?;
+    robot.instruction(RC::SetProfile(profile)).await?;
 
     point.orientation.z = -45.;
     movel!(robot, point);
@@ -231,7 +231,7 @@ async fn robot_arm(opts: RobotArmOpts) -> Result<()> {
     profile.limit = ProfileLimit::default();
 
     robot
-        .instruction(RI::ReturnHome(MotionKind::Direct))
+        .instruction(RC::ReturnHome(MotionKind::Direct))
         .await?;
 
     settle!(robot);

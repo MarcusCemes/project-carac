@@ -248,14 +248,17 @@ impl Iterator for TimeIterator {
 
 pub struct StreamFilter {
     cutoff_frequency: f64,
+    order: usize,
 }
 
 impl StreamFilter {
-    pub const ORDER: usize = 1;
     pub const MIN_SAMPLES: usize = 16;
 
-    pub fn new(cutoff_frequency: f64) -> Self {
-        Self { cutoff_frequency }
+    pub fn new(cutoff_frequency: f64, order: usize) -> Self {
+        Self {
+            cutoff_frequency,
+            order,
+        }
     }
 
     pub fn apply(&self, stream: &mut RecordedStream) -> Result<()> {
@@ -280,7 +283,7 @@ impl StreamFilter {
         );
 
         let filter = Filter::new(
-            Self::ORDER,
+            self.order,
             sample_rate,
             Cutoff::LowPass(self.cutoff_frequency),
         )?;

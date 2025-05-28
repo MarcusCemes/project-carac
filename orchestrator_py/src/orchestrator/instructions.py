@@ -45,6 +45,12 @@ class Point(Serializable):
             rz=self.rz + rhs.rz,
         )
 
+    def toJSON(self) -> Any:
+        return {
+            "position": [self.x, self.y, self.z],
+            "orientation": [self.rx, self.ry, self.rz],
+        }
+
 
 @dataclass
 class Joint(Serializable):
@@ -61,23 +67,55 @@ class MotionKind(Serializable, IntEnum):
     Circular = 3
 
     def toJSON(self):
-        return self.value
+        return self.name
+
+
+class BlendingKind(Serializable, IntEnum):
+    Off = 0
+    Joint = 1
+    Cartesian = 2
+
+    def toJSON(self):
+        return self.name
 
 
 @dataclass
 class Blending(Serializable):
-    kind: int = 0
+    kind: BlendingKind = field(default=BlendingKind.Off)
     leave: int = 50
     reach: int = 50
+
+    def toJSON(self) -> Any:
+        return {
+            "kind": self.kind.toJSON(),
+            "leave": self.leave,
+            "reach": self.reach,
+        }
+
+
+@dataclass
+class ProfileLimit(Serializable):
+    translation: float = 10000.0
+    rotation: float = 10000.0
+
+
+@dataclass
+class ProfileScale(Serializable):
+    acceleration: int = 100
+    velocity: int = 100
+    deceleration: int = 100
 
 
 @dataclass
 class Profile(Serializable):
-    translation_limit: float = 10000.0
-    rotation_limit: float = 10000.0
-    acceleration_scale: int = 100
-    velocity_scale: int = 100
-    deceleration_scale: int = 100
+    limit: ProfileLimit = field(default_factory=ProfileLimit)
+    scale: ProfileScale = field(default_factory=ProfileScale)
+
+    def toJSON(self) -> Any:
+        return {
+            "limit": self.limit.toJSON(),
+            "scale": self.scale.toJSON(),
+        }
 
 
 @dataclass
@@ -133,13 +171,37 @@ class SetBlending(Serializable):
     blending: Blending
 
 
+class ConfigKind(Serializable, IntEnum):
+    Free = 0
+    Same = 1
+    RightyPositive = 2
+    LeftyNegative = 3
+
+    def toJSON(self):
+        return self.name
+
+
+@dataclass
+class Config(Serializable):
+    shoulder: ConfigKind = field(default=ConfigKind.Free)
+    elbow: ConfigKind = field(default=ConfigKind.Free)
+    wrist: ConfigKind = field(default=ConfigKind.Free)
+
+    def toJSON(self) -> Any:
+        return {
+            "shoulder": self.shoulder.toJSON(),
+            "elbow": self.elbow.toJSON(),
+            "wrist": self.wrist.toJSON(),
+        }
+
+
 @dataclass
 class SetConfig(Serializable):
-    config: list[int]
+    config: Config
 
 
 @dataclass
-class SetOffset(Serializable):
+class SetToolOffset(Serializable):
     point: Point
 
 
@@ -154,8 +216,13 @@ class SetProfile(Serializable):
 
 
 @dataclass
-class SetReportInterval(Serializable):
+class SetFrequency(Serializable):
     interval_s: float = 0.1
+
+
+@dataclass
+class SetReporting(Serializable):
+    enabled: bool = True
 
 
 @dataclass
@@ -164,24 +231,25 @@ class WaitSettled(Serializable):
 
 
 @dataclass
-class GoHome(Serializable):
+class ReturnHome(Serializable):
     type: MotionKind = MotionKind.Joint
 
     def toJSON(self):
-        return {"GoHome": self.type.toJSON()}
+        return {"ReturnHome": self.type.toJSON()}
 
 
 @dataclass
 class Robot(Serializable):
     type: (
         Move
-        | GoHome
+        | ReturnHome
         | SetBlending
         | SetConfig
-        | SetOffset
+        | SetFrequency
         | SetPowered
         | SetProfile
-        | SetReportInterval
+        | SetReporting
+        | SetToolOffset
         | WaitSettled
     )
 
@@ -189,19 +257,19 @@ class Robot(Serializable):
 # == Wind Shape == #
 
 
-@dataclass
-class EnablePower(Serializable):
-    enabled: bool
+class SetFanSpeed(Serializable):
+    speed: float = 0
 
+    def __init__(self, speed: float = 0.0):
+        if speed > 1:
+            raise ValueError("Fan speed too high! Must be in [0, 1].")
 
-@dataclass
-class SetWindSpeed(Serializable):
-    speed: int = 0
+        self.speed = speed
 
 
 @dataclass
 class Wind(Serializable):
-    type: EnablePower | SetWindSpeed
+    type: SetPowered | SetFanSpeed | WaitSettled
 
 
 @dataclass

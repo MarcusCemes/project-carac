@@ -138,14 +138,14 @@ impl DataSink {
     }
 
     pub async fn start_recording(&self) {
-        tracing::info!("Recording started");
+        tracing::debug!("Starting recording");
         let mut lock = self.inner.shared.write().await;
 
         lock.reference_time = Some(Instant::now());
     }
 
     pub async fn stop_recording(&self) -> Run {
-        tracing::info!("Recording stopped");
+        tracing::debug!("Stopping recording");
 
         // Acquire exclusive access to stop recording
         self.inner.shared.write().await.reference_time = None;

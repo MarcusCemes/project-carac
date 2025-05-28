@@ -213,8 +213,14 @@ impl HardwareAgent for LoadCell {
 
     async fn start(&mut self) {
         let instruction = match self.buffered_streaming {
-            true => Instruction::StartBuffered,
-            false => Instruction::StartStreaming,
+            true => {
+                tracing::info!("Starting buffered streaming");
+                Instruction::StartBuffered
+            }
+            false => {
+                tracing::info!("Starting unbuffered streaming");
+                Instruction::StartStreaming
+            }
         };
 
         let _ = self.inner.instruction(instruction).await;

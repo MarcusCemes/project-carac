@@ -6,7 +6,7 @@
     </Locals>
     <Code><![CDATA[begin
   buffer[0] = MAGIC_HEADER
-  buffer[1] = 3
+  buffer[1] = 130
   sioSet(socket, buffer)
 end
 ]]></Code>

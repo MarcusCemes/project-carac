@@ -28,6 +28,9 @@ pub struct ConvertOpts {
     #[clap(short, long)]
     cutoff_frequency: Option<f32>,
 
+    #[clap(long, default_value_t = 1)]
+    order: usize,
+
     #[clap(short, long)]
     pub output: Option<PathBuf>,
 }
@@ -51,7 +54,7 @@ pub async fn segment(opts: ConvertOpts) -> Result<()> {
         .wrap_err_with(|| eyre!("Run {} not found", opts.run))?;
 
     if let Some(cutoff_frequency) = opts.cutoff_frequency {
-        let filter = StreamFilter::new(cutoff_frequency as f64);
+        let filter = StreamFilter::new(cutoff_frequency as f64, opts.order);
 
         for stream in &mut run.recorded_streams {
             let _ = filter.apply(stream);

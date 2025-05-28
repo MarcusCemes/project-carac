@@ -114,7 +114,7 @@ impl RobotArm {
 
         let mut buf = Vec::with_capacity(Self::BUFFER_SIZE);
 
-        Request::new(Self::HANDSHAKE_REQUEST_ID, Instruction::Hello).encode(&mut buf);
+        Request::new(Self::HANDSHAKE_REQUEST_ID, Command::Hello).encode(&mut buf);
 
         socket.send(&buf).await?;
 
@@ -136,8 +136,6 @@ impl RobotArm {
 
     pub async fn command(&mut self, command: Command) -> Result<()> {
         match command {
-            Command::Remote(instruction) => self.instruction(instruction).await,
-
             Command::SetOrigin(point) => {
                 let isometry = Isometry3::from(point);
 
@@ -150,17 +148,19 @@ impl RobotArm {
                 self.try_wait_settled().await?;
                 Ok(())
             }
+
+            remote_command => self.instruction(remote_command).await,
         }
     }
 
     /* == Instructions == */
 
-    pub async fn instruction(&self, instruction: Instruction) -> Result<()> {
+    pub async fn instruction(&self, remote_command: Command) -> Result<()> {
         let mut buf = Vec::with_capacity(Self::BUFFER_SIZE);
 
         let (request_id, ack) = self.next_request_id().await;
 
-        Request::new(request_id, instruction).encode(&mut buf);
+        Request::new(request_id, remote_command).encode(&mut buf);
 
         self.inner.socket.send(&buf).await?;
 
@@ -215,6 +215,16 @@ impl RobotArm {
 
                     inner.state.send_replace(Some(state));
                 }
+
+                Response::Settled(settled) => {
+                    inner.state.send_if_modified(|state| {
+                        state.as_mut().map_or(false, |state| {
+                            let notify = state.settled != settled;
+                            state.settled = settled;
+                            notify
+                        })
+                    });
+                }
             }
         }
     }
@@ -243,13 +253,14 @@ impl RobotArm {
 
             // Immediately halt the robot, engaging the brakes
             let request_id = inner.shared.lock().await.next_id();
-            Request::new(request_id, Instruction::Halt(false)).encode(&mut buf);
+
+            Request::new(request_id, Command::Halt(false)).encode(&mut buf);
 
             inner.socket.send(&buf).await?;
 
             // Set the error state and wait for it to be cleared
             inner.error.send_replace(Some(RobotError::Collision));
-            inner.error.subscribe().wait_for(Option::is_some).await?;
+            inner.error.subscribe().wait_for(Option::is_none).await?;
         }
     }
 
@@ -275,7 +286,6 @@ impl RobotArm {
 
             Self::wait_for_settled_value(&mut state, true).await?;
 
-            tracing::debug!("Motion settled");
             Ok(())
         };
 
@@ -330,15 +340,15 @@ impl HardwareAgent for RobotArm {
 
     async fn start(&mut self) {
         for i in [
-            Instruction::SetReporting(true),
-            Instruction::SetProfile(Profile::default()),
+            Command::SetReporting(true),
+            Command::SetProfile(Profile::default()),
         ] {
             let _ = self.instruction(i).await;
         }
     }
 
     async fn stop(&mut self) {
-        let _ = self.instruction(Instruction::SetReporting(false)).await;
+        let _ = self.instruction(Command::SetReporting(false)).await;
     }
 
     async fn register(&mut self, sink: &mut DataSinkBuilder) {

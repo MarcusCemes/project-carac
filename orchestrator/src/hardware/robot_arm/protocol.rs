@@ -1,15 +1,15 @@
 use bytes::{Buf, BufMut};
 use eyre::eyre;
 
-use crate::misc::buf::{BufMutExt, Decode, DecodeError, Encode};
+use crate::misc::buf::{BufExt, BufMutExt, Decode, DecodeError, Encode};
 
 use super::defs::*;
 
 const MAGIC_HEADER: u8 = 0x95;
 
 pub struct Request {
+    command: Command,
     header: Header,
-    instruction: Instruction,
 }
 
 struct Header {
@@ -25,15 +25,16 @@ pub enum Response {
     Error(u16),
     PowerOff,
     State(State),
+    Settled(bool),
 }
 
 /* === Implementations === */
 
 impl Request {
-    pub fn new(request_id: u8, instruction: Instruction) -> Self {
+    pub fn new(request_id: u8, command: Command) -> Self {
         Self {
+            command,
             header: Header::new(request_id),
-            instruction,
         }
     }
 }
@@ -43,7 +44,7 @@ impl Encode for Request {
         buf.put_u8(self.header.magic);
         buf.put_u8(self.header.request_id);
 
-        self.instruction.encode(buf);
+        self.command.encode(buf);
     }
 }
 
@@ -56,61 +57,61 @@ impl Header {
     }
 }
 
-impl Encode for Instruction {
+impl Encode for Command {
     fn encode<B: BufMut>(&self, buf: &mut B) {
         match self {
-            Instruction::Hello => {
+            Command::Hello => {
                 buf.put_u8(0x00);
             }
 
-            Instruction::Halt(return_home) => {
+            Command::Halt(return_home) => {
                 buf.put_u8(0x01);
                 buf.put_bool(*return_home);
             }
 
-            Instruction::SetPowered(powered) => {
+            Command::SetPowered(powered) => {
                 buf.put_u8(0x02);
                 buf.put_bool(*powered);
             }
 
-            Instruction::ReturnHome(motion_type) => {
+            Command::ReturnHome(motion_type) => {
                 buf.put_u8(0x03);
                 buf.put_u8(*motion_type as u8);
             }
 
-            Instruction::SetReporting(enabled) => {
+            Command::SetReporting(enabled) => {
                 buf.put_u8(0x04);
                 buf.put_bool(*enabled);
             }
 
-            Instruction::SetFrequency(interval_s) => {
+            Command::SetFrequency(interval_s) => {
                 buf.put_u8(0x05);
                 buf.put_f32(*interval_s);
             }
 
-            Instruction::SetConfig(config) => {
+            Command::SetConfig(config) => {
                 buf.put_u8(0x06);
                 config.encode(buf);
             }
 
-            Instruction::SetProfile(profile) => {
+            Command::SetProfile(profile) => {
                 buf.put_u8(0x07);
                 profile.encode(buf);
             }
 
-            Instruction::SetBlending(blending) => {
+            Command::SetBlending(blending) => {
                 buf.put_u8(0x08);
                 buf.put_u8(blending.kind as u8);
                 buf.put_f32(blending.reach);
                 buf.put_f32(blending.leave);
             }
 
-            Instruction::SetToolOffset(offset) => {
+            Command::SetToolOffset(offset) => {
                 buf.put_u8(0x09);
                 offset.encode(buf);
             }
 
-            Instruction::Move(motion) => match motion {
+            Command::Move(motion) => match motion {
                 Motion::Direct(point) => {
                     buf.put_u8(0x20);
                     point.encode(buf);
@@ -132,6 +133,8 @@ impl Encode for Instruction {
                     b.encode(buf);
                 }
             },
+
+            _ => unimplemented!("Not a remote command!"),
         }
     }
 }
@@ -151,9 +154,10 @@ impl Decode for Response {
             0x81 => Response::Error(buf.try_get_u16()?),
             0x82 => Response::PowerOff,
             0x83 => Response::State(State::decode(buf)?),
+            0x84 => Response::Settled(buf.try_get_bool()?),
 
             code => {
-                let report = eyre!("Unsupported code: {code:02x}");
+                let report = eyre!("Unsupported code: 0x{code:02x}");
                 tracing::error!("{report}");
 
                 return Err(DecodeError::from(report));

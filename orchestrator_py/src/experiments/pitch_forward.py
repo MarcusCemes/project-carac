@@ -6,7 +6,7 @@ from orchestrator.helpers import *
 
 # Test matrix
 ROT_SPEEDS_RAD: list[float] = [0.5, 1.0, 3.0, 5.0]
-WIND_SPEEDS: list[int] = [0, 46]
+WIND_SPEEDS: list[float] = [0.0, 0.46]
 OFFSET: list[float] = [0.0, DRONE_HEIGHT]
 N_RUNS: int = 3
 
@@ -17,44 +17,48 @@ SWEEP_ANGLE: float = 200
 def main():
     with Orchestrator() as o:
 
+        print("Initializing orchestrator...")
         o.execute(init())
 
+        print("Starting experiments...")
         for wind_speed in WIND_SPEEDS:
             for rot_speed in ROT_SPEEDS_RAD:
                 for offset in OFFSET:
                     run_experiment(o, wind_speed, rot_speed, offset)
 
+        print("Finalising orchestrator...")
         o.execute(finalise())
 
 
 def init() -> list[Instruction]:
     return [
         Reset(),
-        Wind(SetWindSpeed(0)),
-        Wind(EnablePower(True)),
+        Wind(SetFanSpeed(0)),
+        Wind(SetPowered(True)),
         Robot(SetProfile(SLOW_PROFILE)),
-        Robot(GoHome()),
+        Robot(ReturnHome()),
         Robot(WaitSettled()),
         Robot(SetBlending(Blending())),
         Robot(SetProfile(FAST_PROFILE)),
         Robot(SetConfig(WORKING_CONFIG)),
-        Robot(SetOffset(LOAD_CELL_OFFSET)),
+        Robot(SetToolOffset(LOAD_CELL_OFFSET)),
         Robot(Move(MotionDirect(WORKING_POINT))),
         Robot(WaitSettled()),
-        Robot(SetReportInterval(0.01)),
+        Robot(SetFrequency(0.01)),
+        Robot(SetReporting(True)),
     ]
 
 
 def finalise() -> list[Instruction]:
     return [
-        Robot(GoHome()),
-        Wind(SetWindSpeed(0)),
-        Wind(EnablePower(False)),
+        Robot(ReturnHome()),
+        Wind(SetFanSpeed(0)),
+        Wind(SetPowered(False)),
         Robot(WaitSettled()),
     ]
 
 
-def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: float):
+def run_experiment(o: Orchestrator, wind_speed: float, rot_speed: float, offset: float):
     global previous_wind_speed
 
     print(f"Experiment: wind={wind_speed}, speed={rot_speed}, offset={offset}")
@@ -85,7 +89,7 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
         print("Stabilising wind...")
         o.execute(
             [
-                Wind(SetWindSpeed(wind_speed)),
+                Wind(SetFanSpeed(wind_speed)),
                 Sleep(5),
             ]
         )
@@ -121,7 +125,7 @@ def run_experiment(o: Orchestrator, wind_speed: int, rot_speed: float, offset: f
         print("Turning off wind...")
         o.execute(
             [
-                Wind(SetWindSpeed(0)),
+                Wind(SetFanSpeed(0)),
                 Sleep(10),
             ]
         )
@@ -161,7 +165,7 @@ def axis_rotation(point: Point, angle: float = SWEEP_ANGLE):
     f = Robot(Move(MotionLinear(point.add(Point(rx=half_angle)))))
 
     t = [
-        Robot(SetBlending(Blending(1, 1, 1))),
+        Robot(SetBlending(Blending(BlendingKind.Joint, 1, 1))),
         Robot(Move(MotionLinear(point))),
         Robot(SetBlending(Blending())),
         Robot(Move(MotionLinear(point.add(Point(rx=-half_angle))))),

@@ -9,7 +9,7 @@
     </Locals>
     <Code><![CDATA[begin
   buffer[0] = MAGIC_HEADER
-  buffer[1] = 254
+  buffer[1] = 128
   buffer[2] = id
   sioSet(socket, buffer)
 end

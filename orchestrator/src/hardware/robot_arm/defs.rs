@@ -24,8 +24,8 @@ enum ArmConfigKind {
     #[default]
     Free,
     Same,
-    RightlyPositive,
-    LeftNegative,
+    RightyPositive,
+    LeftyNegative,
 }
 
 /* == Bounds == */
@@ -56,15 +56,10 @@ pub enum BlendingKind {
 /* == Command == */
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
 pub enum Command {
     WaitSettled,
     SetOrigin(Point),
-    Remote(Instruction),
-}
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
-pub enum Instruction {
     Halt(bool),
     Hello,
     Move(Motion),

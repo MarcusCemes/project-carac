@@ -27,6 +27,9 @@ pub struct ExportOpts {
 
     #[clap(short, long)]
     cutoff_frequency: Option<f32>,
+
+    #[clap(long, default_value_t = 1)]
+    order: usize,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -72,7 +75,7 @@ pub async fn export(opts: ExportOpts) -> Result<()> {
 
         for (i, mut run) in experiment.runs.into_iter().enumerate() {
             if let Some(cutoff_frequency) = opts.cutoff_frequency {
-                let filter = StreamFilter::new(cutoff_frequency as f64);
+                let filter = StreamFilter::new(cutoff_frequency as f64, opts.order);
 
                 for stream in &mut run.recorded_streams {
                     let _ = filter.apply(stream);

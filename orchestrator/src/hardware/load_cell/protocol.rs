@@ -52,8 +52,8 @@ pub struct NetFtApi2 {
     pub output_rate: u32,
     #[serde(rename = "runrate")]
     pub internal_rate: u32,
-    #[serde(rename = "cfgtfx")]
-    pub tool_transform: [f32; 6],
+    // #[serde(rename = "cfgtfx")]
+    // pub tool_transform: [f32; 6],
     #[serde(rename = "comrdtbsiz")]
     pub buffered_size: u8,
 }
@@ -98,6 +98,8 @@ impl Link {
 
         // Number of messages in the buffer
         let count = buf.len() / Message::SIZE_B;
+
+        // tracing::debug!("Packet contains {count} loads");
 
         // Iterate over each 6-f32 window and decode a load
         Ok((0..count).map(move |i| {
@@ -251,16 +253,16 @@ impl NetFtApi2 {
             );
         }
 
-        if self.tool_transform != Self::TOOL_TRANSFORM {
-            tracing::warn!("Incorrect tool transform, this may lead to malformed data!");
-            tracing::warn!(
-                "Received {:?} (expected {:?})",
-                self.tool_transform,
-                Self::TOOL_TRANSFORM
-            );
-        } else {
-            tracing::info!("Load transform set correctly");
-        }
+        // if self.tool_transform != Self::TOOL_TRANSFORM {
+        //     tracing::warn!("Incorrect tool transform, this may lead to malformed data!");
+        //     tracing::warn!(
+        //         "Received {:?} (expected {:?})",
+        //         self.tool_transform,
+        //         Self::TOOL_TRANSFORM
+        //     );
+        // } else {
+        //     tracing::info!("Load transform set correctly");
+        // }
 
         tracing::info!(
             "RDT buffer set is set to {} samples (max {})",

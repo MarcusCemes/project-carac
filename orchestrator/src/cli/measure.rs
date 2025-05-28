@@ -12,13 +12,12 @@ use crate::{
     hardware::{
         HardwareContext,
         load_cell::LoadCell,
-        robot_arm::defs::{ArmConfig, Instruction as RI, Motion, MotionKind, Profile},
+        robot_arm::defs::{ArmConfig, Command as RC, Motion, MotionKind, Profile},
     },
     misc::data::deinterleave_data,
 };
 
-const CUTOFF_FREQUENCY: f32 = 5.0;
-
+const CUTOFF_FREQUENCY: f32 = 5.;
 #[derive(Clone, Debug, Parser)]
 pub struct MeasureOpts {
     #[clap(short, long, default_value = "config.yaml")]
@@ -29,6 +28,9 @@ pub struct MeasureOpts {
 
     #[clap(long, default_value_t = CUTOFF_FREQUENCY)]
     cutoff_frequency: f32,
+
+    #[clap(long, default_value_t = 1)]
+    order: usize,
 }
 
 pub struct Measure;
@@ -65,16 +67,16 @@ impl Measure {
         let robot = context.robot_arm.as_mut().unwrap();
 
         for i in [
-            RI::SetToolOffset(Point::ZERO),
-            RI::SetConfig(ArmConfig::default()),
-            RI::SetProfile(
+            RC::SetToolOffset(Point::ZERO),
+            RC::SetConfig(ArmConfig::default()),
+            RC::SetProfile(
                 Profile::builder()
                     .with_translation(500.)
-                    .with_rotation(180.)
+                    .with_rotation(90.)
                     .with_smoothing(30)
                     .build(),
             ),
-            RI::ReturnHome(MotionKind::Direct),
+            RC::ReturnHome(MotionKind::Direct),
         ] {
             robot.instruction(i).await?;
         }
@@ -82,14 +84,14 @@ impl Measure {
         robot.try_wait_settled().await?;
 
         let point_offset = Point::new(Self::OFFSET_X, 0., 0., 0., 0., 0.);
-        robot.instruction(RI::SetToolOffset(point_offset)).await?;
+        robot.instruction(RC::SetToolOffset(point_offset)).await?;
 
         let mut runs: Vec<Run> = Vec::with_capacity(Self::POSES.len());
 
         for pose in Self::POSES {
             tracing::info!("Moving to pose...");
 
-            robot.instruction(RI::Move(Motion::Direct(pose))).await?;
+            robot.instruction(RC::Move(Motion::Direct(pose))).await?;
             robot.try_wait_settled().await?;
 
             tracing::info!("Stabilising...");
@@ -103,7 +105,7 @@ impl Measure {
         }
 
         robot
-            .instruction(RI::ReturnHome(MotionKind::Direct))
+            .instruction(RC::ReturnHome(MotionKind::Direct))
             .await?;
 
         robot.try_wait_settled().await?;
@@ -113,7 +115,7 @@ impl Measure {
         for mut run in runs {
             let stream = run.get_stream_mut(LoadCell::NAME, &streams).unwrap();
 
-            StreamFilter::new(opts.cutoff_frequency as f64).apply(stream)?;
+            StreamFilter::new(opts.cutoff_frequency as f64, opts.order).apply(stream)?;
 
             let channels: [_; 6] =
                 deinterleave_data(&stream.channel_data, LoadCell::CHANNELS.len())
@@ -132,21 +134,35 @@ impl Measure {
             results.push(Load {
                 force: Vector3::new(fx, fy, fz),
                 moment: Vector3::new(tx, ty, tz),
-            })
+            });
         }
 
-        let loads: [Load; 3] = results.try_into().unwrap();
+        let mut loads: [Load; 3] = results.try_into().unwrap();
+
+        // TEMPORARY WORKAROUND: Load cell is in drone's coordinate system,
+        // but the equations expect the robot's coordinate system
+        for load in &mut loads {
+            (load.force.x, load.force.y) = (-load.force.y, load.force.x);
+            (load.moment.x, load.moment.y) = (-load.moment.y, load.moment.x);
+        }
+
+        println!("Raw loads:");
+
+        for (i, load) in loads.iter().enumerate() {
+            println!("{i}: {:?} {:?}", load.force, load.moment);
+        }
 
         let bias = solve_bias(loads);
         let (mg, o) = solve_resultant_force(loads, bias);
 
         let m = mg / G;
 
+        println!();
         println!("Force:  {mg} N ({m} kg)\n");
-        println!("Offset [m]{o}");
+        println!("Offset [m]: {o:?}");
 
         println!(
-            "Force bias [N]{}\nMoment bias [Nm]{}",
+            "Offset [m]: {o:?}\nForce bias [N]: {:?}\nMoment bias [Nm]: {:?}",
             bias.force, bias.moment
         );
 
@@ -189,7 +205,7 @@ fn solve_resultant_force(loads: [Load; 3], bias: Load) -> (f32, Vector3<f32>) {
         (mg0 + mg1 + mg2) / 3.
     } else {
         tracing::warn!(
-            "Measured force signs are inconsistent! The load cell may require a z=+180° rotation transform."
+            "Measured force signs are inconsistent! Loads may not be correctly transformed."
         );
 
         (mg0.abs() + mg1.abs() + mg2.abs()) / 3.

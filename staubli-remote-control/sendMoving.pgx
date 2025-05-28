@@ -6,9 +6,8 @@
     </Locals>
     <Code><![CDATA[begin
   buffer[0] = MAGIC_HEADER
-  buffer[1] = 2
+  buffer[1] = 132
   buffer[2] = sel(isSettled(), 1, 0)
-  buffer[3] = sel(isEmpty(), 1, 0)
   sioSet(socket, buffer)
 end
 ]]></Code>
