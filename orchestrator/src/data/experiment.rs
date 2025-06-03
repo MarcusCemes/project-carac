@@ -1,4 +1,5 @@
 use std::{
+    iter,
     path::Path,
     slice::{ChunksExact, Iter},
 };
@@ -269,6 +270,26 @@ impl RecordedStream {
             timestamps,
             n_channels,
         }
+    }
+
+    pub fn dataframe(&self, info: &StreamInfo) -> Result<DataFrame> {
+        let time = self.time_column();
+        let channels = self.columns();
+
+        let time_column = ChunkedArray::<Float32Type>::from_vec("time".into(), time).into_column();
+
+        let channel_columns =
+            channels
+                .into_iter()
+                .zip(info.channels.iter().cloned())
+                .map(|(iter, name)| {
+                    ChunkedArray::<Float32Type>::from_vec(name.into(), iter.into_vec())
+                        .into_column()
+                });
+
+        let columns = iter::once(time_column).chain(channel_columns).collect();
+
+        Ok(DataFrame::new(columns)?)
     }
 
     pub fn time_column(&self) -> Vec<f32> {

@@ -27,7 +27,6 @@ pub struct SessionMetadata {
 }
 
 impl Session {
-    const CHECKPOINTS_DIR: &str = "checkpoints";
     const EXPERIMENTS_DIR: &str = "experiments";
     const TEMP_EXPERIMENT_NAME: &str = "_current";
 
@@ -44,9 +43,6 @@ impl Session {
 
         let metadata = SessionMetadata { streams };
         metadata.save(&path).await?;
-
-        let _ = fs::create_dir(path.join(Self::CHECKPOINTS_DIR)).await;
-        let _ = fs::create_dir(path.join(Self::EXPERIMENTS_DIR)).await;
 
         Ok(Self {
             metadata,
@@ -99,8 +95,13 @@ impl Session {
         let name = Self::experiment_name(id, &name);
 
         let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
+
+        fs::create_dir_all(&dir).await?;
+
         let from = dir.join(Self::TEMP_EXPERIMENT_NAME);
         let to = dir.join(&name);
+
+        tracing::debug!("Saving experiment {name}");
 
         fs::rename(from, to).await?;
 

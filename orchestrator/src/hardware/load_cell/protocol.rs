@@ -43,17 +43,17 @@ pub struct NetFtApi2 {
     #[serde(rename = "scfgtu")]
     pub torque_unit: String,
     #[serde(rename = "cfgcpf")]
-    pub force_counts: u32,
+    pub force_counts: f32,
     #[serde(rename = "cfgcpt")]
-    pub torque_counts: u32,
+    pub torque_counts: f32,
     #[serde(rename = "setuserfilter")]
     pub low_pass_filter: u8,
     #[serde(rename = "comrdtrate")]
     pub output_rate: u32,
     #[serde(rename = "runrate")]
     pub internal_rate: u32,
-    // #[serde(rename = "cfgtfx")]
-    // pub tool_transform: [f32; 6],
+    #[serde(rename = "cfgtfx")]
+    pub tool_transform: String,
     #[serde(rename = "comrdtbsiz")]
     pub buffered_size: u8,
 }
@@ -66,8 +66,8 @@ pub struct LoadCounts {
 impl From<&NetFtApi2> for LoadCounts {
     fn from(config: &NetFtApi2) -> Self {
         Self {
-            force: config.force_counts as f32,
-            torque: config.torque_counts as f32,
+            force: config.force_counts,
+            torque: config.torque_counts,
         }
     }
 }
@@ -75,9 +75,12 @@ impl From<&NetFtApi2> for LoadCounts {
 /* === Implementations === */
 
 impl Link {
+    pub const PORT: u16 = 49152;
+    pub const BUFFER_SIZE: usize = 4096;
+
     const COMMAND_HEADER: u16 = 0x1234;
     const REQUEST_SIZE: usize = 8;
-    const MAX_BUFFER_SIZE: u8 = 40;
+    const MAX_LOADS_PER_PACKET: u8 = 40;
 
     const API_PATH: &str = "/netftapi2.xml";
 
@@ -98,8 +101,6 @@ impl Link {
 
         // Number of messages in the buffer
         let count = buf.len() / Message::SIZE_B;
-
-        // tracing::debug!("Packet contains {count} loads");
 
         // Iterate over each 6-f32 window and decode a load
         Ok((0..count).map(move |i| {
@@ -219,7 +220,7 @@ impl Message {
 impl NetFtApi2 {
     const CUTOFF_FREQ_MAP: [u32; 13] = [0, 838, 326, 152, 73, 35, 18, 8, 5, 1500, 2000, 2500, 3000];
 
-    const TOOL_TRANSFORM: [f32; 6] = [0., 0., 0., 0., 0., 90.];
+    const TOOL_TRANSFORM: &str = "0;0;0;0;0;0";
 
     fn validate(&self) {
         if self.force_unit != LoadCell::STANDARD_FORCE_UNIT {
@@ -253,21 +254,14 @@ impl NetFtApi2 {
             );
         }
 
-        // if self.tool_transform != Self::TOOL_TRANSFORM {
-        //     tracing::warn!("Incorrect tool transform, this may lead to malformed data!");
-        //     tracing::warn!(
-        //         "Received {:?} (expected {:?})",
-        //         self.tool_transform,
-        //         Self::TOOL_TRANSFORM
-        //     );
-        // } else {
-        //     tracing::info!("Load transform set correctly");
-        // }
+        if self.tool_transform != Self::TOOL_TRANSFORM {
+            tracing::warn!("Tool transform enabled! This may cause unexpected behavior.");
+        }
 
         tracing::info!(
             "RDT buffer set is set to {} samples (max {})",
             self.buffered_size,
-            Link::MAX_BUFFER_SIZE
+            Link::MAX_LOADS_PER_PACKET
         );
     }
 }

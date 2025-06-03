@@ -23,8 +23,6 @@ use crate::{
 pub mod defs;
 mod protocol;
 
-const PORT: u16 = 49152;
-
 pub struct LoadCell {
     buffered_streaming: bool,
     inner: Arc<Inner>,
@@ -50,11 +48,11 @@ impl LoadCell {
     const STANDARD_FORCE_UNIT: &str = "N";
     const STANDARD_TORQUE_UNIT: &str = "Nm";
 
-    pub async fn try_new(ip: IpAddr) -> Result<Self> {
+    pub async fn try_new(ip: IpAddr, buffered_streaming: bool) -> Result<Self> {
         let config = Link::fetch_config(ip).await?;
 
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-        socket.connect((ip, PORT)).await?;
+        socket.connect((ip, Link::PORT)).await?;
 
         let link = Link::new(LoadCounts::from(&config), socket);
 
@@ -64,7 +62,6 @@ impl LoadCell {
             shared: Mutex::new(Shared::default()),
         });
 
-        let buffered_streaming = true;
         let task = tokio::spawn(Self::load_cell_task(inner.clone()));
 
         Ok(LoadCell {
@@ -75,16 +72,14 @@ impl LoadCell {
     }
 
     pub async fn try_new_from_config(config: &LoadCellConfig) -> Result<Self> {
-        let mut load_cell = Self::try_new(config.ip).await?;
-
-        load_cell.buffered_streaming = config.buffered_streaming;
+        let load_cell = Self::try_new(config.ip, config.buffered_streaming).await?;
 
         if config.configure_device {
             load_cell.update_settings().await?;
         }
 
         if let Some(point) = config.transform {
-            tracing::info!("Using configuration load cell transform");
+            tracing::info!("Applying load transform from config");
             load_cell.inner.shared.lock().await.transform = LoadTransform::new(&point);
         }
 
@@ -97,24 +92,26 @@ impl LoadCell {
             (
                 "config",
                 [
-                    ("cfgtfx0", "0"),
-                    ("cfgtfx1", "0"),
-                    ("cfgtfx2", "0"),
-                    ("cfgtfx3", "0"),
-                    ("cfgtfx4", "0"),
-                    ("cfgtfx5", "0"),
+                    ("cfgid", "15"),
+                    ("cfgfu", "2"),
+                    ("cfgtu", "3"),
+                    ("cfgtdu", "5"),
+                    ("cfgtau", "1"),
+                    ("cfgtfx0", "0.0"),
+                    ("cfgtfx1", "0.0"),
+                    ("cfgtfx2", "0.0"),
+                    ("cfgtfx3", "0.0"),
+                    ("cfgtfx4", "0.0"),
+                    ("cfgtfx5", "0.0"),
                 ]
                 .as_slice(),
             ),
             (
-                "config",
+                "comm",
                 [
-                    ("cfgtfx0", "0"),
-                    ("cfgtfx1", "0"),
-                    ("cfgtfx2", "0"),
-                    ("cfgtfx3", "0"),
-                    ("cfgtfx4", "0"),
-                    ("cfgtfx5", "0"),
+                    ("comrdte", "1"),
+                    ("comrdtrate", "7000"),
+                    ("comrdtbsiz", "40"),
                 ]
                 .as_slice(),
             ),
@@ -147,7 +144,7 @@ impl LoadCell {
     /* == Background tasks == */
 
     async fn load_cell_task(inner: Arc<Inner>) -> Result<()> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(Link::BUFFER_SIZE);
         let mut channel_data = Vec::new();
 
         loop {

@@ -35,6 +35,10 @@ impl From<TryGetError> for DecodeError {
 /* == Trait extensions == */
 
 pub trait BufExt: Buf {
+    fn clear(&mut self) {
+        self.advance(self.remaining());
+    }
+
     fn ensure_capacity(&mut self, requested: usize) -> Result<(), TryGetError> {
         match self.remaining() {
             n if n >= requested => Ok(()),

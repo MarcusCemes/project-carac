@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any
+from typing import Any, Sequence
 
 
 class Serializable:
@@ -54,7 +54,7 @@ class Point(Serializable):
 
 @dataclass
 class Joint(Serializable):
-    joint: list[float] = field(default_factory=lambda: 6 * [0.0])
+    joint: Sequence[float] = field(default_factory=lambda: 6 * [0.0])
 
     def toJSON(self):
         return {"Joint": self.joint}
@@ -146,6 +146,21 @@ class MotionCircular(Serializable):
 
 
 Motion = MotionDirect | MotionJoint | MotionLinear | MotionCircular
+
+
+# == Device == #
+
+
+@dataclass
+class Device(Serializable):
+    name: str
+    command: Sequence[float]
+
+    def toJSON(self) -> Any:
+        return {"Device": [self.name, self.command]}
+
+
+# == Load == #
 
 
 @dataclass
@@ -297,4 +312,4 @@ class Reset(Serializable):
     pass
 
 
-Instruction = Load | Robot | Wind | BiasAll | Sleep | Reset
+Instruction = Device | Load | Robot | Wind | BiasAll | Sleep | Reset

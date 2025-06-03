@@ -1,29 +1,39 @@
-use std::{fmt, iter, mem, sync::Arc};
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use bytes::Buf;
-use eyre::{Result, bail};
-use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle, time::Instant};
+use eyre::Result;
+use tokio::{
+    sync::Mutex,
+    task::JoinSet,
+    time::{Instant, MissedTickBehavior, interval},
+};
 
 use crate::{
     config::DeviceConfig,
     data::sink::{DataSinkBuilder, StreamWriter},
+    hardware::{HardwareAgent, additional_device::protocol::Link},
 };
 
-use super::HardwareAgent;
+mod protocol;
 
-const BUFFER_SIZE: usize = 1024;
-const MAGIC_NUMBER: u8 = 0xDE;
+pub enum Command {
+    Set(Vec<f32>),
+}
 
 pub struct Device {
     inner: Arc<Inner>,
-    task: JoinHandle<Result<()>>,
+    tasks: JoinSet<Result<()>>,
 }
 
 struct Inner {
     config: DeviceConfig,
-    socket: UdpSocket,
-    stream: Mutex<Option<StreamWriter>>,
+    link: Link,
+    shared: Mutex<Shared>,
+}
+
+struct Shared {
+    state: Box<[f32]>,
+    stream: Option<StreamWriter>,
 }
 
 impl Device {
@@ -32,42 +42,94 @@ impl Device {
     }
 
     pub async fn connect(config: DeviceConfig) -> Result<Self> {
-        let socket = UdpSocket::bind((config.ip, 0)).await?;
+        let link = Link::try_new(config.ip, config.port).await?;
+        let inner = Arc::new(Inner::new(config, link));
 
-        socket.connect((config.ip, config.port)).await?;
+        let mut tasks = JoinSet::new();
 
-        let inner = Arc::new(Inner::new(config, socket));
-        let task = tokio::spawn(device_task(inner.clone()));
+        tasks.spawn(Self::send_task(inner.clone()));
+        tasks.spawn(Self::receive_task(inner.clone()));
 
-        Ok(Device { inner, task })
+        Ok(Device { inner, tasks })
     }
 
     pub fn config(&self) -> &DeviceConfig {
         &self.inner.config
     }
-}
 
-#[tracing::instrument(skip_all, fields(device = inner.config.name))]
-async fn device_task(inner: Arc<Inner>) -> Result<()> {
-    let mut buf = Vec::with_capacity(BUFFER_SIZE);
-    let mut data = Vec::with_capacity(inner.config.channels.len());
+    pub async fn command(&self, mut command: Command) -> Result<()> {
+        if let Some(bounds) = &self.inner.config.extra.channel_bounds {
+            Self::apply_bounds(&mut command, bounds)?;
+        }
 
-    loop {
-        inner.socket.recv_buf(&mut buf).await?;
-        let now = Instant::now();
+        match command {
+            Command::Set(state) => {
+                {
+                    let mut lock = self.inner.shared.lock().await;
+                    lock.state.copy_from_slice(&state);
+                }
 
-        if let Some(ref stream) = *inner.stream.lock().await {
-            let msg = parse_message(&buf[..], inner.config.channels.len())?;
-
-            if let Message::State(mut payload) = msg {
-                data.clear();
-                data.extend(iter::from_fn(|| payload.try_get_f32().ok()));
-
-                stream.add(now, &data).await;
+                self.inner.link.send_state(&state, &mut Vec::new()).await?;
             }
         }
 
-        buf.clear();
+        Ok(())
+    }
+
+    fn apply_bounds(command: &mut Command, bounds: &[(f32, f32)]) -> Result<()> {
+        match command {
+            Command::Set(values) => {
+                assert_eq!(values.len(), bounds.len(),);
+
+                for (value, (min, max)) in values.iter_mut().zip(bounds) {
+                    *value = value.clamp(*min, *max);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /* == Task == */
+
+    async fn send_task(inner: Arc<Inner>) -> Result<()> {
+        let maybe_frequency = inner.config.extra.transmit_rate;
+        let maybe_period = maybe_frequency.map(|p| Duration::from_secs_f32(1. / p as f32));
+
+        if let Some(period) = maybe_period {
+            let mut buf = Vec::with_capacity(inner.config.channels.len());
+            let mut timer = interval(period);
+
+            timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            loop {
+                timer.tick().await;
+
+                let lock = inner.shared.lock().await;
+                inner.link.send_state(&lock.state, &mut buf).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn receive_task(inner: Arc<Inner>) -> Result<()> {
+        let mut buf = Vec::with_capacity(Link::BUFFER_SIZE);
+        let mut data = Vec::with_capacity(inner.config.channels.len());
+
+        loop {
+            inner.link.receive_state(&mut data, &mut buf).await?;
+            let now = Instant::now();
+
+            let lock = inner.shared.lock().await;
+
+            if let Some(stream) = &lock.stream {
+                stream.add(now, &data).await;
+            }
+
+            buf.clear();
+            data.clear();
+        }
     }
 }
 
@@ -77,7 +139,8 @@ impl HardwareAgent for Device {
         let DeviceConfig { name, channels, .. } = &self.inner.config;
         let stream = sink.register_stream(name.clone(), channels.clone()).await;
 
-        *self.inner.stream.lock().await = Some(stream);
+        let mut lock = self.inner.shared.lock().await;
+        lock.stream = Some(stream);
     }
 }
 
@@ -87,47 +150,15 @@ impl fmt::Display for Device {
     }
 }
 
-impl Drop for Device {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
 impl Inner {
-    fn new(config: DeviceConfig, socket: UdpSocket) -> Self {
+    fn new(config: DeviceConfig, link: Link) -> Self {
         Self {
+            shared: Mutex::new(Shared {
+                state: vec![0.; config.channels.len()].into_boxed_slice(),
+                stream: None,
+            }),
             config,
-            socket,
-            stream: Default::default(),
+            link,
         }
-    }
-}
-
-enum Message<B: Buf> {
-    State(B),
-    Error(u8),
-}
-
-fn parse_message<B: Buf>(mut buf: B, n_channels: usize) -> Result<Message<B>> {
-    if buf.try_get_u8() != Ok(MAGIC_NUMBER) {
-        bail!("Missing magic header!");
-    }
-
-    match buf.try_get_u8() {
-        Ok(0x0) => {
-            let expected_payload_size = n_channels * mem::size_of::<f32>();
-            let buf_size = buf.remaining();
-
-            // Check the message payload size is correct
-            if buf_size != expected_payload_size {
-                bail!("Expected {n_channels} floats ({expected_payload_size} B), got {buf_size}",);
-            }
-
-            Ok(Message::State(buf))
-        }
-
-        Ok(0x1) => Ok(Message::Error(buf.try_get_u8().unwrap_or(0xFF))),
-        Ok(code) => bail!("Unsupported code: {code}"),
-        Err(_) => bail!("Missing code!"),
     }
 }

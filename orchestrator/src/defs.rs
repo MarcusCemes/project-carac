@@ -156,7 +156,7 @@ impl Decode for Joints {
 
 /* == Force/Moment ==  */
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Load {
     pub force: Vector3<f32>,
     pub moment: Vector3<f32>,

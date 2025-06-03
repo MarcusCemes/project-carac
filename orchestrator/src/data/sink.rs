@@ -223,7 +223,7 @@ impl StreamWriter {
                 None => {
                     let k_samples = (time_us as f32 / period) as usize;
                     let offset = n_samples - k_samples;
-                    let start_us = time_us - (k_samples as f32 * period) as u32;
+                    let start_us = time_us - ((k_samples - 1) as f32 * period) as u32;
                     let duration_us = k_samples as f32 * period;
 
                     (start_us, offset, duration_us)

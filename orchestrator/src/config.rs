@@ -37,7 +37,7 @@ pub struct LoadCellConfig {
     #[serde(default = "LoadCellConfig::update_settings")]
     pub configure_device: bool,
 
-    #[serde(default = "LoadCellConfig::buffered_streaming")]
+    #[serde(default)]
     pub buffered_streaming: bool,
 
     #[serde(default)]
@@ -96,9 +96,16 @@ pub struct DeviceConfig {
     pub ip: IpAddr,
     pub port: u16,
 
-    #[serde(default)]
     pub channels: Vec<String>,
-    pub transmit_rate: u16,
+
+    #[serde(default, flatten)]
+    pub extra: DeviceConfigExtra,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DeviceConfigExtra {
+    pub channel_bounds: Option<Vec<(f32, f32)>>,
+    pub transmit_rate: Option<u16>,
 }
 
 /* == Default implementations == */
@@ -114,10 +121,6 @@ impl Default for PlotJugglerConfig {
 
 impl LoadCellConfig {
     const fn update_settings() -> bool {
-        true
-    }
-
-    const fn buffered_streaming() -> bool {
         true
     }
 }

@@ -3,6 +3,7 @@ use eyre::Result;
 
 mod convert;
 mod export;
+mod extract;
 mod measure;
 mod plot;
 mod server;
@@ -19,6 +20,7 @@ struct Cli {
 pub enum Command {
     Convert(convert::ConvertOpts),
     Export(export::ExportOpts),
+    Extract(extract::ExtractOpts),
     Measure(measure::MeasureOpts),
     Plot(plot::PlotOpts),
     View(view::ViewOpts),
@@ -48,6 +50,7 @@ pub async fn execute_command(command: Command) -> Result<()> {
     match command {
         Command::Convert(opts) => convert::segment(opts).await,
         Command::Export(opts) => export::export(opts).await,
+        Command::Extract(opts) => extract::extract(opts).await,
         Command::Measure(opts) => measure::Measure::run(opts).await,
         Command::Plot(opts) => plot::plot(opts).await,
         Command::Server { config, port } => server::launch(&config, port).await,

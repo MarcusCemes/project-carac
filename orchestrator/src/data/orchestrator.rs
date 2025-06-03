@@ -9,8 +9,9 @@ use crate::{
     config::Config,
     data::{experiment::Run, session::Session, sink::DataSink},
     hardware::{
-        HardwareAgent, HardwareContext, load_cell::defs::Command as LoadCommand,
-        robot_arm::defs::Command as RobotCommand, wind_shape::defs::Command as WindCommand,
+        HardwareAgent, HardwareContext, additional_device::Command as DeviceCommand,
+        load_cell::defs::Command as LoadCommand, robot_arm::defs::Command as RobotCommand,
+        wind_shape::defs::Command as WindCommand,
     },
     misc::{plot_juggler::PlotJugglerBroadcaster, type_name},
 };
@@ -26,6 +27,7 @@ pub struct Orchestrator {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Instruction {
+    Device(String, Vec<f32>),
     Load(LoadCommand),
     Robot(RobotCommand),
     Wind(WindCommand),
@@ -123,6 +125,16 @@ impl Orchestrator {
         tracing::trace!("Executing {instruction:?}");
 
         match instruction {
+            Instruction::Device(name, command) => {
+                self.context
+                    .additional_devices
+                    .iter()
+                    .find(|device| device.config().name == name)
+                    .ok_or_else(|| eyre!("Device {name} not found"))?
+                    .command(DeviceCommand::Set(command))
+                    .await?;
+            }
+
             Instruction::Load(command) => {
                 require_agent(&mut self.context.load_cell)?
                     .command(command)

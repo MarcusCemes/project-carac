@@ -334,7 +334,35 @@ impl LoadTransform {
 
     pub fn apply(&self, load: &Load) -> Load {
         let force = self.rotation * load.force;
-        let moment = self.rotation * load.moment + self.translation.cross(&force);
+        let moment = self.rotation * load.moment - self.translation.cross(&force);
         Load { force, moment }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_transform() {
+        let point = Point {
+            position: Vector3::new(0., 0., 1.),
+            orientation: Vector3::zeros(),
+        };
+
+        let load = Load {
+            force: Vector3::new(1., 0., 0.),
+            moment: Vector3::new(0., 1., 0.),
+        };
+
+        let transform = LoadTransform::new(&point);
+
+        assert_eq!(
+            transform.apply(&load),
+            Load {
+                force: Vector3::new(1., 0., 0.),
+                moment: Vector3::zeros(),
+            }
+        );
     }
 }

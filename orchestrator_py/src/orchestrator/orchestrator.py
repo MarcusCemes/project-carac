@@ -1,3 +1,4 @@
+from typing import Sequence
 from httpx import Client
 
 from .instructions import Instruction
@@ -21,7 +22,7 @@ class Orchestrator:
 
     # == Commands == #
 
-    def execute(self, instructions: list[Instruction]):
+    def execute(self, instructions: Sequence[Instruction]):
         return self.handle_request(
             self._client.post(
                 "/execute",
@@ -29,7 +30,7 @@ class Orchestrator:
             )
         )
 
-    def record(self, instructions: list[Instruction]):
+    def record(self, instructions: Sequence[Instruction]):
         return self.handle_request(
             self._client.post(
                 "/record",

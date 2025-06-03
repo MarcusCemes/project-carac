@@ -26,10 +26,10 @@ pub struct ExportOpts {
     pub divisions: u32,
 
     #[clap(short, long)]
-    cutoff_frequency: Option<f32>,
+    pub cutoff_frequency: Option<f32>,
 
     #[clap(long, default_value_t = 1)]
-    order: usize,
+    pub order: usize,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
