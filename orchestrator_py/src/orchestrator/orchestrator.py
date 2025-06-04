@@ -39,10 +39,12 @@ class Orchestrator:
         )
 
     def new_experiment(self, name: str):
-        return self._client.post(
-            "/new_experiment",
-            json={"name": name},
-        ).raise_for_status()
+        return self.handle_request(
+            self._client.post(
+                "/new_experiment",
+                json={"name": name},
+            )
+        )
 
     def save_experiment(self):
         return self._client.post("/save_experiment").raise_for_status()

@@ -52,10 +52,11 @@ impl Session {
     }
 
     pub async fn new_experiment(&mut self, name: String) -> Result<()> {
-        let path = self
-            .root_path
-            .join(Self::EXPERIMENTS_DIR)
-            .join(Self::TEMP_EXPERIMENT_NAME);
+        let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
+
+        fs::create_dir_all(&dir).await?;
+
+        let path = dir.join(Self::TEMP_EXPERIMENT_NAME);
 
         let mut file = File::create(path).await?;
         let mut buf = ChunkedBytes::new();

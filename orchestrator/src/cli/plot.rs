@@ -5,7 +5,7 @@ use eyre::{Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use plotters::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tokio::fs;
+use tokio::{fs, runtime::Handle};
 
 use crate::data::{
     experiment::Experiment,
@@ -70,8 +70,10 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
         .progress_chars("##-"),
     );
 
+    let handle = Handle::current();
+
     experiments.into_par_iter().try_for_each(|(id, path)| {
-        render_experiment(
+        let task = render_experiment(
             id,
             &path,
             &output_dir,
@@ -79,7 +81,9 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
             &filter,
             streams,
             &bar,
-        )
+        );
+
+        handle.block_on(task)
     })?;
 
     bar.finish_and_clear();
@@ -87,7 +91,7 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
     Ok(())
 }
 
-fn render_experiment(
+async fn render_experiment(
     id: u32,
     path: &path::Path,
     output_dir: &path::Path,
@@ -96,7 +100,7 @@ fn render_experiment(
     stream_info: &[StreamInfo],
     bar: &ProgressBar,
 ) -> Result<()> {
-    let (experiment, experiment_dir) = load_experiment(id, path, output_dir)?;
+    let (experiment, experiment_dir) = load_experiment(id, path, output_dir).await?;
 
     let jobs = experiment.runs.len() * stream_info.iter().map(|s| s.channels.len()).sum::<usize>();
     bar.inc_length(jobs as u64);
@@ -135,7 +139,6 @@ fn render_experiment(
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
 async fn load_experiment(
     id: u32,
     path: &path::Path,
