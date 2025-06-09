@@ -1,6 +1,14 @@
 use clap::{Parser, Subcommand};
 use eyre::Result;
 
+use crate::{
+    cli::{
+        measure::{Measure, MeasureOpts},
+        server::Server,
+    },
+    create_runtime,
+};
+
 mod convert;
 mod export;
 mod extract;
@@ -11,49 +19,69 @@ mod view;
 
 #[derive(Parser)]
 #[command(version, about)]
-struct Cli {
+pub struct CliOpts {
     #[command(subcommand)]
-    command: Command,
+    command: Option<CliCommand>,
+
+    #[clap(flatten)]
+    server: ServerOpts,
 }
 
 #[derive(Subcommand)]
-pub enum Command {
+pub enum CliCommand {
+    Measure(MeasureOpts),
+    Server(ServerOpts),
+}
+
+#[derive(Parser)]
+pub struct ServerOpts {
+    #[arg(short, long, default_value = "config.yaml")]
+    pub config: String,
+
+    #[arg(short, long, default_value_t = 8080)]
+    pub port: u16,
+}
+
+#[derive(Subcommand)]
+pub enum ServerCommand {
+    Measure(MeasureOpts),
+    Server(ServerOpts),
+}
+
+#[derive(Parser)]
+#[command(version, about)]
+pub struct KitOpts {
+    #[command(subcommand)]
+    command: KitCommand,
+}
+
+#[derive(Subcommand)]
+pub enum KitCommand {
     Convert(convert::ConvertOpts),
     Export(export::ExportOpts),
     Extract(extract::ExtractOpts),
-    Measure(measure::MeasureOpts),
     Plot(plot::PlotOpts),
     View(view::ViewOpts),
-
-    Server {
-        #[arg(short, long, default_value = "config.yaml")]
-        config: String,
-        #[arg(short, long, default_value_t = 8080)]
-        port: u16,
-    },
 }
 
-#[derive(Subcommand)]
-enum ConfigCommand {
-    Test {
-        #[arg(short, long, default_value = "config.yaml")]
-        config: String,
-    },
+pub fn cli(opts: CliOpts) -> Result<()> {
+    let rt = create_runtime();
+
+    match opts.command {
+        Some(command) => match command {
+            CliCommand::Measure(opts) => rt.block_on(Measure::run(opts)),
+            CliCommand::Server(opts) => rt.block_on(Server::launch(opts)),
+        },
+        None => rt.block_on(Server::launch(opts.server)),
+    }
 }
 
-pub fn run() -> Result<()> {
-    execute_command(Cli::parse().command)
-}
-
-#[tokio::main(worker_threads = 4)]
-pub async fn execute_command(command: Command) -> Result<()> {
-    match command {
-        Command::Convert(opts) => convert::segment(opts).await,
-        Command::Export(opts) => export::export(opts).await,
-        Command::Extract(opts) => extract::extract(opts).await,
-        Command::Measure(opts) => measure::Measure::run(opts).await,
-        Command::Plot(opts) => plot::plot(opts).await,
-        Command::Server { config, port } => server::launch(&config, port).await,
-        Command::View(opts) => view::view(opts).await,
+pub fn kit(opts: KitOpts) -> Result<()> {
+    match opts.command {
+        KitCommand::Convert(opts) => convert::segment(opts),
+        KitCommand::Export(opts) => export::export(opts),
+        KitCommand::Extract(opts) => extract::extract(opts),
+        KitCommand::Plot(opts) => plot::plot(opts),
+        KitCommand::View(opts) => view::view(opts),
     }
 }

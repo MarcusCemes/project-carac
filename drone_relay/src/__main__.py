@@ -1,5 +1,4 @@
 from asyncio import (
-    CancelledError,
     DatagramProtocol,
     DatagramTransport,
     Event,

@@ -1,10 +1,9 @@
-use std::path::PathBuf;
+use std::{fs::create_dir, path::PathBuf};
 
 use clap::{Parser, ValueEnum};
 use eyre::{Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use polars::prelude::*;
-use tokio::fs;
 
 use crate::data::{
     experiment::Experiment,
@@ -39,8 +38,8 @@ pub enum OutputFormat {
     Parquet,
 }
 
-pub async fn export(opts: ExportOpts) -> Result<()> {
-    let Ok(metadata) = SessionMetadata::load(&opts.session_path).await else {
+pub fn export(opts: ExportOpts) -> Result<()> {
+    let Ok(metadata) = SessionMetadata::load(&opts.session_path) else {
         bail!("Session metadata not found");
     };
 
@@ -48,11 +47,11 @@ pub async fn export(opts: ExportOpts) -> Result<()> {
     let output_dir = opts.session_path.join(OUTPUT_DIR);
 
     if !output_dir.exists() {
-        fs::create_dir(&output_dir).await?;
+        create_dir(&output_dir)?;
     }
 
-    let session = Session::open(opts.session_path, metadata.streams).await?;
-    let experiments = session.list_experiments().await?;
+    let session = Session::open(opts.session_path, metadata.streams)?;
+    let experiments = session.list_experiments()?;
 
     tracing::info!("Found {} experiments", experiments.len());
 
@@ -71,7 +70,7 @@ pub async fn export(opts: ExportOpts) -> Result<()> {
     for (id, path) in experiments {
         bar.inc(1);
 
-        let experiment = Experiment::load(&path).await?;
+        let experiment = Experiment::load(&path)?;
 
         for (i, mut run) in experiment.runs.into_iter().enumerate() {
             if let Some(cutoff_frequency) = opts.cutoff_frequency {

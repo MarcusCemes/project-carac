@@ -8,8 +8,6 @@ use serde::Serialize;
 
 use crate::{config::PlotJugglerConfig, data::sink::StreamInfo};
 
-const DEFAULT_PORT: u16 = 9870;
-
 /* == PlotJugglerBroadcaster == */
 
 pub struct PlotJugglerBroadcasterBuilder {

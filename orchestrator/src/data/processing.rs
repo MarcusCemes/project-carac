@@ -14,7 +14,7 @@ use super::{
 
 #[derive(Debug, Clone, Copy)]
 pub struct SegmentationOptions {
-    method: SegmentationMethod,
+    _method: SegmentationMethod,
 }
 
 #[derive(Debug, Clone, Copy)]

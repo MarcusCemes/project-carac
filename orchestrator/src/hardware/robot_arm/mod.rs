@@ -38,7 +38,7 @@ pub struct RobotArm {
     inner: Arc<Inner>,
 
     receiver: JoinHandle<Result<()>>,
-    watchdog: JoinHandle<Result<()>>,
+    _watchdog: JoinHandle<Result<()>>,
 }
 
 struct Inner {
@@ -96,12 +96,12 @@ impl RobotArm {
 
         let inner = Arc::new(Inner::new(bounds, error, socket, state));
         let receiver = tokio::spawn(Self::receiver_task(inner.clone()));
-        let watchdog = tokio::spawn(Self::collision_task(inner.clone()));
+        let _watchdog = tokio::spawn(Self::collision_task(inner.clone()));
 
         Ok(RobotArm {
             inner,
             receiver,
-            watchdog,
+            _watchdog,
         })
     }
 
@@ -146,6 +146,11 @@ impl RobotArm {
 
             Command::WaitSettled => {
                 self.try_wait_settled().await?;
+                Ok(())
+            }
+
+            Command::WaitProgress(progress) => {
+                self.wait_for_progress(progress).await?;
                 Ok(())
             }
 
@@ -218,7 +223,7 @@ impl RobotArm {
 
                 Response::Settled(settled) => {
                     inner.state.send_if_modified(|state| {
-                        state.as_mut().map_or(false, |state| {
+                        state.as_mut().is_some_and(|state| {
                             let notify = state.settled != settled;
                             state.settled = settled;
                             notify
@@ -293,6 +298,32 @@ impl RobotArm {
         select! {
             Ok(error) = error_task => Err(error),
             _ = moving_task() => Ok(()),
+        }
+    }
+
+    pub async fn wait_for_progress(&self, value: f32) -> Result<(), RobotError> {
+        let mut error = self.inner.error.subscribe();
+        let mut state = self.inner.state.subscribe();
+
+        let error_task = async {
+            error.wait_for(Option::is_some).await.map(|maybe_error| {
+                // SAFETY: wait_for guarantees that the value is Some
+                unsafe { maybe_error.unwrap_unchecked() }
+            })
+        };
+
+        let mut progress_task = async || -> Result<()> {
+            state
+                .wait_for(|s| s.as_ref().is_some_and(|s| s.progress >= value))
+                .await?;
+
+            Ok(())
+        };
+
+        // Race the error and progress value, whichever comes first
+        select! {
+            Ok(error) = error_task => Err(error),
+            _ = progress_task() => Ok(()),
         }
     }
 

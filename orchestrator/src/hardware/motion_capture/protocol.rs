@@ -10,7 +10,7 @@ use super::nat_net::{Message, Request};
 /* === Definitions === */
 
 pub struct Link {
-    socket: UdpSocket,
+    pub socket: UdpSocket,
 }
 
 /* === Implementations === */

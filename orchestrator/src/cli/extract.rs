@@ -45,9 +45,9 @@ pub enum OutputFormat {
     Parquet,
 }
 
-pub async fn extract(opts: ExtractOpts) -> Result<()> {
-    let maybe_metadata = SessionMetadata::find(&opts.path).await;
-    let mut experiment = Experiment::load(&opts.path).await?;
+pub fn extract(opts: ExtractOpts) -> Result<()> {
+    let maybe_metadata = SessionMetadata::find(&opts.path);
+    let mut experiment = Experiment::load(&opts.path)?;
 
     let metadata = maybe_metadata.unwrap_or_else(|| experiment.guess_metadata());
 

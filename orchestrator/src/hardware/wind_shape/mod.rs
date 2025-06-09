@@ -1,5 +1,5 @@
 use std::{
-    fmt,
+    cmp, fmt,
     net::IpAddr,
     str,
     sync::{
@@ -20,7 +20,10 @@ use tokio::{
 
 use crate::{
     config::WindShapeConfig,
-    data::sink::{DataSinkBuilder, StreamWriter},
+    data::{
+        orchestrator::{Event, EventServer},
+        sink::{DataSinkBuilder, StreamWriter},
+    },
     hardware::HardwareAgent,
 };
 
@@ -95,9 +98,15 @@ impl WindShape {
 
     /* == Public API == */
 
-    pub async fn command(&self, command: Command) -> Result<()> {
+    pub async fn command(&self, command: Command, events: &mut EventServer) -> Result<()> {
         match command {
-            Command::SetFanSpeed(speed) => self.set_fan_speed(speed).await,
+            Command::SetFanSpeed(speed) => {
+                if speed > 0. {
+                    events.publish(Event::Buzzer);
+                }
+
+                self.set_fan_speed(speed).await
+            }
             Command::SetPowered(powered) => self.set_powered(powered).await,
             Command::WaitSettled => self.wait_settled().await,
         }
@@ -303,22 +312,21 @@ impl Inner {
 struct VirtualFan(u8);
 
 impl VirtualFan {
-    const FAN_CHANGE_RATE: u8 = 10;
+    const FAN_CHANGE_RATE: u8 = 6;
 
     pub fn new() -> Self {
         VirtualFan::default()
     }
 
     pub fn update(&mut self, target: u8, delta: Duration) -> u8 {
+        let delta = (delta.as_secs_f32() * Self::FAN_CHANGE_RATE as f32).round() as u8;
         let target = target.min(100);
 
-        let delta = (delta.as_secs_f32() * Self::FAN_CHANGE_RATE as f32).round() as u8;
-
-        if target > self.0 {
-            self.0 = self.0.saturating_add(delta).min(target);
-        } else if target < self.0 {
-            self.0 = self.0.saturating_sub(delta);
-        }
+        self.0 = match target.cmp(&self.0) {
+            cmp::Ordering::Greater => self.0.saturating_add(delta).min(target),
+            cmp::Ordering::Less => self.0.saturating_sub(delta).max(target),
+            cmp::Ordering::Equal => self.0,
+        };
 
         self.0
     }

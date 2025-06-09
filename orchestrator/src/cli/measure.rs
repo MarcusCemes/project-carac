@@ -157,12 +157,8 @@ impl Measure {
 
         let m = mg / G;
 
-        println!();
-        println!("Force:  {mg} N ({m} kg)\n");
-        println!("Offset [m]: {o:?}");
-
         println!(
-            "Offset [m]: {o:?}\nForce bias [N]: {:?}\nMoment bias [Nm]: {:?}",
+            "\nForce:  {mg} N ({m} kg)\nOffset [m]: {o:?}\nForce bias [N]: {:?}\nMoment bias [Nm]: {:?}",
             bias.force, bias.moment
         );
 

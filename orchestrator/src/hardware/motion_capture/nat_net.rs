@@ -8,7 +8,6 @@ use crate::misc::buf::{BufExt, Decode, DecodeError, Encode};
 /* === Definitions === */
 
 type Vec3 = (f32, f32, f32);
-type Vec4 = (f32, f32, f32, f32);
 
 pub struct NatNetV3_1;
 

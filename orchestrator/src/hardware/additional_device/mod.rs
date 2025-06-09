@@ -22,7 +22,7 @@ pub enum Command {
 
 pub struct Device {
     inner: Arc<Inner>,
-    tasks: JoinSet<Result<()>>,
+    _tasks: JoinSet<Result<()>>,
 }
 
 struct Inner {
@@ -45,12 +45,12 @@ impl Device {
         let link = Link::try_new(config.ip, config.port).await?;
         let inner = Arc::new(Inner::new(config, link));
 
-        let mut tasks = JoinSet::new();
+        let mut _tasks = JoinSet::new();
 
-        tasks.spawn(Self::send_task(inner.clone()));
-        tasks.spawn(Self::receive_task(inner.clone()));
+        _tasks.spawn(Self::send_task(inner.clone()));
+        _tasks.spawn(Self::receive_task(inner.clone()));
 
-        Ok(Device { inner, tasks })
+        Ok(Device { inner, _tasks })
     }
 
     pub fn config(&self) -> &DeviceConfig {

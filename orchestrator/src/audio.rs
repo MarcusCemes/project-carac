@@ -7,39 +7,34 @@ use std::{
 use eyre::Result;
 use rodio::{Decoder, OutputStream, Sink};
 
-pub struct AudioPlayer {
-    queue: mpsc::Sender<AudioFile>,
-    thread: JoinHandle<Result<()>>,
-}
+use crate::data::orchestrator::Event;
 
-#[derive(Copy, Clone, Debug)]
-pub enum AudioFile {
-    Up,
-    Down,
-    Double,
+pub struct AudioPlayer {
+    queue: mpsc::Sender<Event>,
+    _thread: JoinHandle<Result<()>>,
 }
 
 impl AudioPlayer {
     pub fn try_new() -> Result<Self> {
         let (queue, rx) = mpsc::channel();
-        let thread = spawn(move || audio_thread(rx));
+        let _thread = spawn(move || audio_thread(rx));
 
-        Ok(AudioPlayer { queue, thread })
+        Ok(AudioPlayer { queue, _thread })
     }
 
-    pub fn queue(&self, audio_file: AudioFile) -> Result<()> {
-        self.queue.send(audio_file)?;
+    pub fn queue(&self, event: Event) -> Result<()> {
+        self.queue.send(event)?;
         Ok(())
     }
 }
 
-fn audio_thread(queue: mpsc::Receiver<AudioFile>) -> Result<()> {
+fn audio_thread(queue: mpsc::Receiver<Event>) -> Result<()> {
     let (_stream, handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&handle)?;
 
-    while let Ok(audio_file) = queue.recv() {
-        let cursor = Cursor::new(audio_file.get_bytes());
-        let sound = Decoder::new_wav(cursor)?;
+    while let Ok(event) = queue.recv() {
+        let cursor = Cursor::new(audio_file(event));
+        let sound = Decoder::new_aac(cursor)?;
 
         sink.append(sound);
     }
@@ -47,12 +42,12 @@ fn audio_thread(queue: mpsc::Receiver<AudioFile>) -> Result<()> {
     Ok(())
 }
 
-impl AudioFile {
-    fn get_bytes(self) -> &'static [u8] {
-        match self {
-            AudioFile::Up => include_bytes!("./assets/beep-up.wav"),
-            AudioFile::Down => include_bytes!("./assets/beep-down.wav"),
-            AudioFile::Double => include_bytes!("./assets/beep-double.wav"),
-        }
+fn audio_file(event: Event) -> &'static [u8] {
+    match event {
+        Event::Buzzer => include_bytes!("./assets/buzzer.aac"),
+        Event::Complete => include_bytes!("./assets/complete.aac"),
+        Event::End => include_bytes!("./assets/end.aac"),
+        Event::Error => include_bytes!("./assets/error.aac"),
+        Event::Notification => include_bytes!("./assets/notification.aac"),
     }
 }

@@ -111,6 +111,10 @@ impl Encode for Command {
                 offset.encode(buf);
             }
 
+            Command::ResetMoveId => {
+                buf.put_u8(0x0A);
+            }
+
             Command::Move(motion) => match motion {
                 Motion::Direct(point) => {
                     buf.put_u8(0x20);

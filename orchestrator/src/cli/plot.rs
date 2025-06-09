@@ -1,11 +1,13 @@
-use std::path::{self, PathBuf};
+use std::{
+    fs::create_dir,
+    path::{self, PathBuf},
+};
 
 use clap::Parser;
 use eyre::{Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use plotters::prelude::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tokio::{fs, runtime::Handle};
 
 use crate::data::{
     experiment::Experiment,
@@ -37,8 +39,8 @@ pub struct PlotOpts {
     only_streams: Option<Vec<String>>,
 }
 
-pub async fn plot(opts: PlotOpts) -> Result<()> {
-    let Ok(metadata) = SessionMetadata::load(&opts.session_path).await else {
+pub fn plot(opts: PlotOpts) -> Result<()> {
+    let Ok(metadata) = SessionMetadata::load(&opts.session_path) else {
         bail!("Session metadata not found");
     };
 
@@ -47,11 +49,11 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
         .unwrap_or_else(|| opts.session_path.join(PLOTS_DIR));
 
     if !output_dir.exists() {
-        fs::create_dir(&output_dir).await?;
+        create_dir(&output_dir)?;
     }
 
-    let session = Session::open(opts.session_path, metadata.streams).await?;
-    let experiments = session.list_experiments().await?;
+    let session = Session::open(opts.session_path, metadata.streams)?;
+    let experiments = session.list_experiments()?;
 
     tracing::info!("Found {} experiments", experiments.len());
 
@@ -70,10 +72,8 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
         .progress_chars("##-"),
     );
 
-    let handle = Handle::current();
-
     experiments.into_par_iter().try_for_each(|(id, path)| {
-        let task = render_experiment(
+        render_experiment(
             id,
             &path,
             &output_dir,
@@ -81,9 +81,7 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
             &filter,
             streams,
             &bar,
-        );
-
-        handle.block_on(task)
+        )
     })?;
 
     bar.finish_and_clear();
@@ -91,7 +89,7 @@ pub async fn plot(opts: PlotOpts) -> Result<()> {
     Ok(())
 }
 
-async fn render_experiment(
+fn render_experiment(
     id: u32,
     path: &path::Path,
     output_dir: &path::Path,
@@ -100,7 +98,7 @@ async fn render_experiment(
     stream_info: &[StreamInfo],
     bar: &ProgressBar,
 ) -> Result<()> {
-    let (experiment, experiment_dir) = load_experiment(id, path, output_dir).await?;
+    let (experiment, experiment_dir) = load_experiment(id, path, output_dir)?;
 
     let jobs = experiment.runs.len() * stream_info.iter().map(|s| s.channels.len()).sum::<usize>();
     bar.inc_length(jobs as u64);
@@ -139,16 +137,16 @@ async fn render_experiment(
     Ok(())
 }
 
-async fn load_experiment(
+fn load_experiment(
     id: u32,
     path: &path::Path,
     output_dir: &path::Path,
 ) -> Result<(Experiment, PathBuf)> {
-    let experiment = Experiment::load(path).await?;
+    let experiment = Experiment::load(path)?;
     let experiment_dir = output_dir.join(format!("{id:04}"));
 
-    if !fs::try_exists(&experiment_dir).await? {
-        fs::create_dir(&experiment_dir).await?;
+    if !experiment_dir.try_exists()? {
+        create_dir(&experiment_dir)?;
     }
 
     Ok((experiment, experiment_dir))

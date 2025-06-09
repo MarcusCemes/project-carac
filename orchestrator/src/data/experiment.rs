@@ -1,4 +1,5 @@
 use std::{
+    fs::read,
     iter,
     path::Path,
     slice::{ChunksExact, Iter},
@@ -8,7 +9,6 @@ use bytes::{Buf, BufMut, TryGetError};
 use chunked_bytes::ChunkedBytes;
 use eyre::{Context, ContextCompat, Result, eyre};
 use polars::prelude::*;
-use tokio::fs;
 
 use crate::{
     data::sink::StreamInfo,
@@ -67,11 +67,10 @@ pub struct SampleTime(pub u32);
 /* === Implementations === */
 
 impl Experiment {
-    pub async fn load(path: &Path) -> Result<Self> {
-        let contents = fs::read(path).await?;
-        let mut buf = &contents[..];
+    pub fn load(path: &Path) -> Result<Self> {
+        let file = read(path)?;
 
-        Self::decode(&mut buf).wrap_err("Failed to decode experiment")
+        Self::decode(&mut &file[..]).wrap_err("Failed to decode experiment")
     }
 
     pub fn stream_names(&self, streams: Option<&[StreamInfo]>) -> impl Iterator<Item = String> {

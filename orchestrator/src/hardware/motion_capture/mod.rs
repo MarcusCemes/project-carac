@@ -62,10 +62,17 @@ impl MotionCapture {
 
         let definitions = Self::fetch_model_definitions(&link).await?;
 
+        // Discover the correct network interface for multicast
+        let local_ip = match link.socket.local_addr()?.ip() {
+            IpAddr::V4(ipv4) => ipv4,
+            IpAddr::V6(_) => bail!("IPv6 is not supported for multicast discovery"),
+        };
+
         drop(link);
 
+        tracing::debug!("Using local interface {local_ip} for multicast");
         let data_socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, Link::DATA_PORT)).await?;
-        data_socket.join_multicast_v4(multicast_ip, Ipv4Addr::UNSPECIFIED)?;
+        data_socket.join_multicast_v4(multicast_ip, local_ip)?;
 
         let link = Link::new(data_socket);
 

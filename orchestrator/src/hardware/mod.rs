@@ -14,7 +14,9 @@ pub mod motion_capture;
 pub mod robot_arm;
 pub mod wind_shape;
 
-use crate::{config::HardwareConfig, data::sink::DataSinkBuilder, misc::type_name};
+use crate::{
+    HARDWARE_TIMEOUT, config::HardwareConfig, data::sink::DataSinkBuilder, misc::type_name,
+};
 
 #[async_trait]
 pub trait HardwareAgent: Display + Send {
@@ -61,8 +63,6 @@ pub struct HardwareContextBuilder {
 }
 
 impl HardwareContextBuilder {
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
-
     pub fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.timeout = timeout;
         self
@@ -113,7 +113,7 @@ impl HardwareContextBuilder {
 impl Default for HardwareContextBuilder {
     fn default() -> Self {
         Self {
-            timeout: Some(HardwareContextBuilder::DEFAULT_TIMEOUT),
+            timeout: Some(HARDWARE_TIMEOUT),
         }
     }
 }

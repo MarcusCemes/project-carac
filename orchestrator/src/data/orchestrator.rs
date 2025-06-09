@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
 use crate::{
-    audio::{AudioFile, AudioPlayer},
+    audio::AudioPlayer,
     config::Config,
     data::{experiment::Run, session::Session, sink::DataSink},
     hardware::{
@@ -19,8 +19,8 @@ use crate::{
 /* === Definitions === */
 
 pub struct Orchestrator {
-    audio: Option<AudioPlayer>,
     context: HardwareContext,
+    events: EventServer,
     session: Session,
     sink: DataSink,
 }
@@ -56,16 +56,14 @@ impl Orchestrator {
             }
         }
 
-        let audio = (!config.sink.disable_audio)
-            .then_some(())
-            .and_then(|_| AudioPlayer::try_new().ok());
+        let events = EventServer::new(!config.sink.disable_audio);
 
         tracing::info!("Creating session");
-        let session = Session::open(path, streams).await?;
+        let session = Session::open(path, streams)?;
 
         Ok(Self {
-            audio,
             context,
+            events,
             session,
             sink,
         })
@@ -98,23 +96,14 @@ impl Orchestrator {
     }
 
     pub async fn record(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
-        if let Some(audio) = &self.audio {
-            let _ = audio.queue(AudioFile::Up);
-        }
-
         self.sink.start_recording().await;
 
         self.execute(instructions).await.inspect_err(|_| {
-            if let Some(audio) = &self.audio {
-                let _ = audio.queue(AudioFile::Double);
-            }
+            self.events.publish(Event::Error);
         })?;
 
         let run = self.sink.stop_recording().await;
-
-        if let Some(audio) = &self.audio {
-            let _ = audio.queue(AudioFile::Down);
-        }
+        self.events.publish(Event::Complete);
 
         self.session.append_run(&run).await?;
 
@@ -148,16 +137,8 @@ impl Orchestrator {
             }
 
             Instruction::Wind(command) => {
-                if let WindCommand::SetFanSpeed(speed) = &command {
-                    if *speed > 0. {
-                        if let Some(audio) = self.audio.as_ref() {
-                            let _ = audio.queue(AudioFile::Double);
-                        }
-                    }
-                }
-
                 require_agent(&mut self.context.wind_shape)?
-                    .command(command)
+                    .command(command, &mut self.events)
                     .await?;
             }
 
@@ -181,24 +162,54 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub async fn new_experiment(&mut self, name: String) -> Result<()> {
-        self.session.new_experiment(name).await
+    pub fn new_experiment(&mut self, name: String) -> Result<()> {
+        self.session.new_experiment(name)
     }
 
-    pub async fn save_experiment(&mut self) -> Result<()> {
-        self.session.save_experiment().await
+    pub fn save_experiment(&mut self) -> Result<()> {
+        self.session.save_experiment()
     }
 
-    pub async fn new_run(&mut self) {
+    pub async fn start_recording(&mut self) {
         self.sink.start_recording().await;
     }
 
-    pub async fn save_run(&mut self) -> Result<Run> {
+    pub async fn stop_recording(&mut self) -> Result<Run> {
         let run = self.sink.stop_recording().await;
+        self.events.publish(Event::Complete);
 
         self.session.append_run(&run).await?;
 
         Ok(run)
+    }
+}
+
+pub struct EventServer {
+    player: Option<AudioPlayer>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Event {
+    Buzzer,
+    Complete,
+    End,
+    Error,
+    Notification,
+}
+
+impl EventServer {
+    pub fn new(enable_audio: bool) -> Self {
+        let player = enable_audio
+            .then_some(())
+            .and_then(|_| AudioPlayer::try_new().ok());
+
+        Self { player }
+    }
+
+    pub fn publish(&mut self, event: Event) {
+        if let Some(player) = &mut self.player {
+            let _ = player.queue(event);
+        }
     }
 }
 

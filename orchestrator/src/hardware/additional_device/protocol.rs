@@ -16,10 +16,6 @@ struct Request<'a> {
     state: &'a [f32],
 }
 
-pub struct Update {
-    pub state: Vec<f32>,
-}
-
 /* == Implementations ==  */
 
 impl Link {
@@ -39,7 +35,7 @@ impl Link {
         buf.clear();
 
         Request { state }.encode(buf);
-        self.socket.send(&buf).await?;
+        self.socket.send(buf).await?;
 
         Ok(())
     }

@@ -26,6 +26,12 @@ SLOW_PROFILE = Profile(
     scale=ProfileScale(acceleration=30, deceleration=30),
 )
 
+MEDIUM_PROFILE = Profile(
+    limit=ProfileLimit(translation=400, rotation=120),
+    scale=ProfileScale(acceleration=40, deceleration=40),
+)
+
+
 FAST_PROFILE = Profile(
     limit=ProfileLimit(translation=1000, rotation=180),
     scale=ProfileScale(acceleration=70, deceleration=70),

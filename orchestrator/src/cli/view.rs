@@ -15,9 +15,9 @@ pub struct ViewOpts {
     all: bool,
 }
 
-pub async fn view(opts: ViewOpts) -> Result<()> {
-    let experiment = Experiment::load(&opts.path).await?;
-    let maybe_metadata = SessionMetadata::find(&opts.path).await;
+pub fn view(opts: ViewOpts) -> Result<()> {
+    let experiment = Experiment::load(&opts.path)?;
+    let maybe_metadata = SessionMetadata::find(&opts.path);
 
     println!("# == Metadata == #\n");
 

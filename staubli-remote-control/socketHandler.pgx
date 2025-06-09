@@ -96,6 +96,10 @@
       logMsg("[SOCKET] Tool offset request")
       call decodeTool(endEffector, buffer[3])
 
+    elseIf buffer[3] == 10 and payloadSize == 0
+      logMsg("[SOCKET] Reset movement ID")
+      setMoveId(0)
+
 
     elseIf buffer[2] == 32 and payloadSize == 24
       logMsg("[SOCKET] Direct move request")

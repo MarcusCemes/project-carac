@@ -1,12 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::{File, create_dir_all, read_dir, rename},
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 use chunked_bytes::ChunkedBytes;
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
-use tokio::{
-    fs::{self, File},
-    io::{self, AsyncReadExt, AsyncWriteExt},
-};
 
 use crate::{
     data::{experiment::Run, sink::StreamInfo},
@@ -38,11 +38,11 @@ impl Session {
 
     /* == Persistence == */
 
-    pub async fn open(path: PathBuf, streams: Vec<StreamInfo>) -> Result<Self> {
-        fs::create_dir_all(&path).await?;
+    pub fn open(path: PathBuf, streams: Vec<StreamInfo>) -> Result<Self> {
+        create_dir_all(&path)?;
 
         let metadata = SessionMetadata { streams };
-        metadata.save(&path).await?;
+        metadata.save(&path)?;
 
         Ok(Self {
             metadata,
@@ -51,20 +51,22 @@ impl Session {
         })
     }
 
-    pub async fn new_experiment(&mut self, name: String) -> Result<()> {
+    pub fn new_experiment(&mut self, name: String) -> Result<()> {
         let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
 
-        fs::create_dir_all(&dir).await?;
+        create_dir_all(&dir)?;
 
         let path = dir.join(Self::TEMP_EXPERIMENT_NAME);
 
-        let mut file = File::create(path).await?;
+        let mut file = File::create(path)?;
         let mut buf = ChunkedBytes::new();
 
         let header = ExperimentHeader::new(name, self.metadata.channels());
         header.encode(&mut buf);
 
-        file.write_all_buf(&mut buf).await?;
+        for chunk in buf.into_chunks() {
+            file.write_all(&chunk)?;
+        }
 
         self.open_experiment = Some((file, header.name));
 
@@ -79,43 +81,46 @@ impl Session {
         let mut buf = ChunkedBytes::new();
         run.encode(&mut buf);
 
-        file.write_all_buf(&mut buf).await?;
-        file.flush().await?;
+        for chunk in buf.into_chunks() {
+            file.write_all(&chunk)?;
+        }
+
+        file.flush()?;
 
         Ok(())
     }
 
-    pub async fn save_experiment(&mut self) -> Result<()> {
+    pub fn save_experiment(&mut self) -> Result<()> {
         let Some((file, name)) = self.open_experiment.take() else {
             bail!("No experiment file open");
         };
 
         drop(file);
 
-        let id = self.next_experiment_number().await?;
+        let id = self.next_experiment_number()?;
         let name = Self::experiment_name(id, &name);
 
         let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
 
-        fs::create_dir_all(&dir).await?;
+        create_dir_all(&dir)?;
 
         let from = dir.join(Self::TEMP_EXPERIMENT_NAME);
         let to = dir.join(&name);
 
         tracing::debug!("Saving experiment {name}");
 
-        fs::rename(from, to).await?;
+        rename(from, to)?;
 
         Ok(())
     }
 
-    pub async fn list_experiments(&self) -> Result<Vec<(u32, PathBuf)>> {
+    pub fn list_experiments(&self) -> Result<Vec<(u32, PathBuf)>> {
         let dir = self.root_path.join(Self::EXPERIMENTS_DIR);
-        let mut files = fs::read_dir(dir).await?;
+        let mut files = read_dir(dir)?;
 
         let mut experiments = Vec::new();
 
-        while let Some(entry) = files.next_entry().await? {
+        while let Some(Ok(entry)) = files.next() {
             if let Some(name) = entry.file_name().to_str() {
                 if let Some(id) = Self::extract_id(name) {
                     let path = entry.path();
@@ -137,11 +142,12 @@ impl Session {
         format!("{id:04}_{run}.{extension}")
     }
 
-    async fn next_experiment_number(&self) -> Result<u32> {
-        let mut files = fs::read_dir(self.root_path.join(Self::EXPERIMENTS_DIR)).await?;
+    fn next_experiment_number(&self) -> Result<u32> {
+        let path = self.root_path.join(Self::EXPERIMENTS_DIR);
+        let mut dir = read_dir(path)?;
         let mut max_id = None;
 
-        while let Some(entry) = files.next_entry().await? {
+        while let Some(Ok(entry)) = dir.next() {
             if let Some(name) = entry.file_name().to_str() {
                 if let Some(id) = Self::extract_id(name) {
                     let value = max_id.get_or_insert(id);
@@ -167,14 +173,14 @@ impl SessionMetadata {
         Self { streams }
     }
 
-    pub async fn find(path: &Path) -> Option<Self> {
+    pub fn find(path: &Path) -> Option<Self> {
         let mut iter = path.ancestors();
         iter.next();
 
         for _ in 0..Self::FIND_LEVELS {
             match iter.next() {
                 Some(path) => {
-                    if let Ok(meta) = Self::load(path).await {
+                    if let Ok(meta) = Self::load(path) {
                         return Some(meta);
                     }
                 }
@@ -186,20 +192,19 @@ impl SessionMetadata {
         None
     }
 
-    pub async fn load(path: &Path) -> Result<SessionMetadata> {
-        let mut file = File::open(path.join(Self::FILE_NAME)).await?;
+    pub fn load(path: &Path) -> Result<SessionMetadata> {
+        let path = path.join(Self::FILE_NAME);
+        let mut file = File::open(path)?;
 
-        let mut buf = String::new();
-        file.read_to_string(&mut buf).await?;
-
-        Ok(serde_json::from_str(&buf)?)
+        Ok(serde_json::from_reader(&mut file)?)
     }
 
-    async fn save(&self, path: &Path) -> io::Result<()> {
-        let mut file = File::create(path.join(Self::FILE_NAME)).await?;
+    fn save(&self, path: &Path) -> io::Result<()> {
+        let path = path.join(Self::FILE_NAME);
+        let mut file = File::create(path)?;
 
-        file.write_all(&serde_json::to_vec(self)?).await?;
-        file.flush().await
+        serde_json::to_writer(&mut file, self)?;
+        file.flush()
     }
 
     fn channels(&self) -> Box<[u8]> {

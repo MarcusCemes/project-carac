@@ -57,6 +57,7 @@ pub enum BlendingKind {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Command {
+    WaitProgress(f32),
     WaitSettled,
     SetOrigin(Point),
 
@@ -71,6 +72,7 @@ pub enum Command {
     SetProfile(Profile),
     SetReporting(bool),
     SetToolOffset(Point),
+    ResetMoveId,
 }
 
 /* == Motion == */
@@ -116,6 +118,7 @@ pub struct State {
     pub joints: Joints,
     pub joint_error: Joints,
     pub settled: bool,
+    pub progress: f32,
 }
 
 /* == Implementations === */
@@ -206,6 +209,7 @@ impl Decode for State {
             joints: Joints::decode(buf)?,
             joint_error: Joints::decode(buf)?,
             settled: buf.try_get_bool()?,
+            progress: buf.try_get_f32()?,
         })
     }
 }
