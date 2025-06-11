@@ -4,11 +4,14 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use eyre::{ContextCompat, Result, eyre};
 use polars::prelude::*;
 
-use crate::data::{experiment::Experiment, processing::StreamFilter, session::SessionMetadata};
+use crate::{
+    cli::common::OutputFormat,
+    data::{experiment::Experiment, processing::StreamFilter, session::SessionMetadata},
+};
 
 #[derive(Clone, Debug, Parser)]
 pub struct ExtractOpts {
@@ -36,13 +39,6 @@ pub struct ExtractOpts {
 
     #[clap(short, long)]
     pub output: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug, ValueEnum)]
-#[clap(rename_all = "kebab-case")]
-pub enum OutputFormat {
-    Csv,
-    Parquet,
 }
 
 pub fn extract(opts: ExtractOpts) -> Result<()> {

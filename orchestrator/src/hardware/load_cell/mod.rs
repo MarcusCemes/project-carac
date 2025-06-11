@@ -42,7 +42,7 @@ struct Shared {
 }
 
 impl LoadCell {
-    pub const NAME: &str = "load_cell";
+    pub const NAME: &str = "load";
     pub const CHANNELS: [&str; Load::WIDTH] = Load::CHANNELS;
 
     const STANDARD_FORCE_UNIT: &str = "N";

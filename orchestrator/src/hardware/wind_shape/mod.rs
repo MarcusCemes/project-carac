@@ -61,8 +61,8 @@ pub struct Shared {
 }
 
 impl WindShape {
-    pub const NAME: &str = "wind_shape";
-    pub const CHANNELS: [&str; 1] = ["fan_speed"];
+    pub const NAME: &str = "wind";
+    pub const CHANNELS: [&str; 1] = ["speed"];
 
     const LOCAL_PORT: u16 = 60333;
     const REMOTE_PORT: u16 = 60334;

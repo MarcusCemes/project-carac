@@ -9,6 +9,7 @@ use crate::{
     create_runtime,
 };
 
+mod common;
 mod convert;
 mod export;
 mod extract;
@@ -59,6 +60,7 @@ pub struct KitOpts {
 pub enum KitCommand {
     Convert(convert::ConvertOpts),
     Export(export::ExportOpts),
+    // ExportCalibrated(export_calibrated::ExportCalibratedOpts),
     Extract(extract::ExtractOpts),
     Plot(plot::PlotOpts),
     View(view::ViewOpts),
@@ -80,6 +82,7 @@ pub fn kit(opts: KitOpts) -> Result<()> {
     match opts.command {
         KitCommand::Convert(opts) => convert::segment(opts),
         KitCommand::Export(opts) => export::export(opts),
+        // KitCommand::ExportCalibrated(opts) => export_calibrated::export_calibrated(opts),
         KitCommand::Extract(opts) => extract::extract(opts),
         KitCommand::Plot(opts) => plot::plot(opts),
         KitCommand::View(opts) => view::view(opts),

@@ -166,8 +166,8 @@ impl Session {
 }
 
 impl SessionMetadata {
-    pub const FILE_NAME: &str = "_meta.json";
-    const FIND_LEVELS: usize = 2;
+    pub const FILE_NAME: &str = "meta.json";
+    const SEARCH_LEVELS: usize = 2;
 
     pub fn new(streams: Vec<StreamInfo>) -> Self {
         Self { streams }
@@ -177,7 +177,7 @@ impl SessionMetadata {
         let mut iter = path.ancestors();
         iter.next();
 
-        for _ in 0..Self::FIND_LEVELS {
+        for _ in 0..Self::SEARCH_LEVELS {
             match iter.next() {
                 Some(path) => {
                     if let Ok(meta) = Self::load(path) {

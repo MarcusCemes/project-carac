@@ -1,0 +1,7 @@
+click==8.2
+fastparquet==2024.11
+matplotlib==3.10
+numpy==2.3
+pandas==2.3
+rich==14.0
+seaborn==0.13

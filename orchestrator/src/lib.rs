@@ -4,8 +4,6 @@ use eyre::Result;
 use tokio::runtime;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::{CliOpts, KitOpts};
-
 mod audio;
 pub mod cli;
 pub mod config;
@@ -13,6 +11,8 @@ pub mod data;
 pub mod defs;
 pub mod hardware;
 pub mod misc;
+
+pub use cli::{cli, kit};
 
 const HARDWARE_TIMEOUT: Duration = Duration::from_secs(1);
 const WORKER_THREADS: usize = 4;
@@ -43,14 +43,6 @@ pub fn init() -> Result<()> {
 pub fn banner() {
     eprintln!("\n{NAME} {VERSION} ({TARGET_ARCH}-{TARGET_VENDOR}-{TARGET_OS}-{TARGET_ENV})");
     eprintln!("Designed by Marcus Cemes <marcus.cemes@epfl.ch>\n");
-}
-
-pub fn cli(opts: CliOpts) -> Result<()> {
-    cli::cli(opts)
-}
-
-pub fn kit(opts: KitOpts) -> Result<()> {
-    cli::kit(opts)
 }
 
 pub fn create_runtime() -> runtime::Runtime {

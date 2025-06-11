@@ -34,7 +34,7 @@ pub struct StreamWriter {
     stream: StreamInfo,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamInfo {
     pub name: String,
     pub channels: Vec<String>,
