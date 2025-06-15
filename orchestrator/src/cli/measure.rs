@@ -57,7 +57,7 @@ impl Measure {
         let mut context = HardwareContext::builder().build(&config).await?;
         let mut builder = DataSink::builder();
 
-        for agent in context.iter_mut() {
+        for agent in context.iter() {
             agent.register(&mut builder).await;
             agent.start().await;
         }

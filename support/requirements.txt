@@ -1,7 +1,9 @@
-click==8.2
 fastparquet==2024.11
+httpx==0.28
 matplotlib==3.10
+noise==1.2
 numpy==2.3
 pandas==2.3
 rich==14.0
+scipy==1.15
 seaborn==0.13

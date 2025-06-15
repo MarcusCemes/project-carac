@@ -45,7 +45,7 @@ impl ExampleCounter {
 
 #[async_trait]
 impl HardwareAgent for ExampleCounter {
-    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+    async fn register(&self, sink: &mut DataSinkBuilder) {
         let name = self.name.clone();
         let channels = ["count"].map(str::to_owned).to_vec();
         let stream = sink.register_stream(name, channels).await;

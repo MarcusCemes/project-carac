@@ -180,7 +180,13 @@ def run_experiment(
 ):
     task = progress.add_task("Computing trajectory", total=None)
 
-    name = parameters.name("coupled_axis")
+    name = (
+        "coupled-axis"
+        if sum(1 if x != 0 else 0 for x in parameters.speeds) >= 2
+        else "decoupled-axis"
+    )
+
+    name = parameters.name(name)
     o.new_experiment(name)
 
     speeds = parameters.speeds

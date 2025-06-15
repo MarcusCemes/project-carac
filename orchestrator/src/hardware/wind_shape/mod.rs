@@ -36,7 +36,7 @@ pub struct WindShape {
     inner: Arc<Inner>,
 
     request_control: watch::Sender<bool>,
-    status: watch::Receiver<Status>,
+    status: watch::Sender<Status>,
 
     tasks: JoinSet<Result<()>>,
 }
@@ -98,7 +98,7 @@ impl WindShape {
 
     /* == Public API == */
 
-    pub async fn command(&self, command: Command, events: &mut EventServer) -> Result<()> {
+    pub async fn command(&self, command: Command, events: &EventServer) -> Result<()> {
         match command {
             Command::SetFanSpeed(speed) => {
                 if speed > 0. {
@@ -112,11 +112,11 @@ impl WindShape {
         }
     }
 
-    pub async fn request_control(&mut self) {
+    pub async fn request_control(&self) {
         self.set_in_control(true).await
     }
 
-    pub async fn release_control(&mut self) {
+    pub async fn release_control(&self) {
         self.set_in_control(false).await
     }
 
@@ -136,21 +136,14 @@ impl WindShape {
         self.send_module_state().await
     }
 
-    async fn set_in_control(&mut self, value: bool) {
-        self.request_control
-            .send(value)
-            .expect("WindShape control task died");
+    async fn set_in_control(&self, value: bool) {
+        self.request_control.send(value).unwrap();
 
-        loop {
-            self.status
-                .changed()
-                .await
-                .expect("WindShape receiver task died");
-
-            if self.status.borrow_and_update().in_control == value {
-                break;
-            }
-        }
+        self.status
+            .subscribe()
+            .wait_for(|s| s.in_control == value)
+            .await
+            .unwrap();
     }
 
     async fn wait_settled(&self) -> Result<()> {
@@ -185,20 +178,20 @@ impl WindShape {
     fn spawn_tasks(
         inner: Arc<Inner>,
     ) -> (
-        watch::Receiver<Status>,
+        watch::Sender<Status>,
         watch::Sender<bool>,
         JoinSet<Result<()>>,
     ) {
-        let (status_tx, status_rx) = watch::channel(Status::default());
+        let (status, _) = watch::channel(Status::default());
         let (state_tx, state_rx) = watch::channel(false);
 
         let mut set = JoinSet::new();
 
         set.spawn(Self::control_task(inner.clone(), state_rx));
-        set.spawn(Self::receiver_task(inner.clone(), status_tx));
+        set.spawn(Self::receiver_task(inner.clone(), status.clone()));
         set.spawn(Self::stream_task(inner));
 
-        (status_rx, state_tx, set)
+        (status, state_tx, set)
     }
 
     async fn control_task(inner: Arc<Inner>, mut control: watch::Receiver<bool>) -> Result<()> {
@@ -270,7 +263,7 @@ impl fmt::Display for WindShape {
 
 #[async_trait]
 impl HardwareAgent for WindShape {
-    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+    async fn register(&self, sink: &mut DataSinkBuilder) {
         let name = Self::NAME.to_owned();
         let channels = Self::CHANNELS.map(str::to_owned).to_vec();
 
@@ -279,11 +272,11 @@ impl HardwareAgent for WindShape {
         self.inner.shared.lock().await.stream = Some(stream);
     }
 
-    async fn start(&mut self) {
+    async fn start(&self) {
         self.request_control().await;
     }
 
-    async fn stop(&mut self) {
+    async fn stop(&self) {
         self.release_control().await;
     }
 }

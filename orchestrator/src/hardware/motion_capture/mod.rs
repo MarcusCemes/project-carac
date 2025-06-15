@@ -198,7 +198,7 @@ impl MotionCapture {
 
 #[async_trait]
 impl HardwareAgent for MotionCapture {
-    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+    async fn register(&self, sink: &mut DataSinkBuilder) {
         let mut lock = self.inner.shared.lock().await;
 
         for subscription in &mut lock.subscriptions {

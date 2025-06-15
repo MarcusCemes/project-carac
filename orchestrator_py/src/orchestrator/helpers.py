@@ -18,8 +18,15 @@ WORKING_CONFIG = Config(
 ZERO_OFFSET = Point()
 LOAD_CELL_OFFSET = Point(x=660.0)
 DRONE_OFFSET = Point(x=660.0, z=300.0)
+BASE_POINT_DRONE = BASE_POINT.add(DRONE_OFFSET)
 
 DRONE_HEIGHT: float = 320.0
+DRONE_ACT_ZERO = [-1.0, 0.0, 0.0, 0.0, 0.0]
+
+BLEND_NONE = Blending()
+BLEND_S = Blending(BlendingKind.Cartesian, leave=50, reach=50)
+BLEND_L = Blending(BlendingKind.Cartesian, leave=150, reach=150)
+BLEND_XL = Blending(BlendingKind.Cartesian, leave=300, reach=300)
 
 SLOW_PROFILE = Profile(
     limit=ProfileLimit(translation=250, rotation=90),

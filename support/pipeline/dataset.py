@@ -22,6 +22,13 @@ class ExperimentComposition:
 
 
 def load_datasets():
+    decoupled, coupled = load_axis_datasets()
+    free_flight = load_free_flight_dataset()
+
+    return (decoupled, coupled, free_flight)
+
+
+def load_axis_datasets():
     # Load the sessions and their respective coupled and decoupled experiments.
     session_loaded = load_experiments(LOADED_DATAFRAMES)
     loaded_decoupled = session_loaded[0:486]
@@ -69,6 +76,24 @@ def load_datasets():
     assert len(coupled_compositions) == 36
 
     return (decoupled_compositions, coupled_compositions)
+
+
+def load_free_flight_dataset():
+    files = load_experiments(FREE_FLIGHT_DATAFRAMES)
+
+    calibration = files.pop()
+
+    return [
+        ExperimentComposition(
+            experiment=experiment,
+            negative=[calibration],
+            positive=[],
+        )
+        for experiment in files
+    ]
+
+
+# == Utilities == #
 
 
 def load_experiments(path: Path) -> list[Path]:

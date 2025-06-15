@@ -134,12 +134,13 @@ impl RobotArm {
 
     /* == Commands == */
 
-    pub async fn command(&mut self, command: Command) -> Result<()> {
+    pub async fn command(&self, command: Command) -> Result<()> {
         match command {
             Command::SetOrigin(point) => {
                 let isometry = Isometry3::from(point);
 
-                self.inner.shared.lock().await.origin_transform = isometry.inverse();
+                let mut lock = self.inner.shared.lock().await;
+                lock.origin_transform = isometry.inverse();
 
                 Ok(())
             }
@@ -271,6 +272,10 @@ impl RobotArm {
 
     /* == Miscellaneous == */
 
+    pub fn get_progress(&self) -> Option<f32> {
+        self.inner.state.borrow().as_ref().map(|s| s.progress)
+    }
+
     pub async fn try_wait_settled(&self) -> Result<(), RobotError> {
         let mut error = self.inner.error.subscribe();
         let mut state = self.inner.state.subscribe();
@@ -301,7 +306,7 @@ impl RobotArm {
         }
     }
 
-    pub async fn wait_for_progress(&self, value: f32) -> Result<(), RobotError> {
+    async fn wait_for_progress(&self, value: f32) -> Result<(), RobotError> {
         let mut error = self.inner.error.subscribe();
         let mut state = self.inner.state.subscribe();
 
@@ -362,14 +367,14 @@ impl RobotArm {
 
 #[async_trait]
 impl HardwareAgent for RobotArm {
-    async fn error(&mut self) -> Result<(), Report> {
+    async fn error(&self) -> Result<(), Report> {
         match *self.inner.error.borrow() {
             Some(code) => bail!("Robot error (code {code})"),
             None => Ok(()),
         }
     }
 
-    async fn start(&mut self) {
+    async fn start(&self) {
         for i in [
             Command::SetReporting(true),
             Command::SetProfile(Profile::default()),
@@ -378,11 +383,11 @@ impl HardwareAgent for RobotArm {
         }
     }
 
-    async fn stop(&mut self) {
+    async fn stop(&self) {
         let _ = self.instruction(Command::SetReporting(false)).await;
     }
 
-    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+    async fn register(&self, sink: &mut DataSinkBuilder) {
         let name = Self::NAME.to_owned();
         let channels = Self::CHANNELS.map(str::to_owned).to_vec();
         let stream = sink.register_stream(name, channels).await;
@@ -390,7 +395,7 @@ impl HardwareAgent for RobotArm {
         self.inner.shared.lock().await.stream = Some(stream);
     }
 
-    async fn clear_error(&mut self) {
+    async fn clear_error(&self) {
         self.inner.error.send_replace(None);
     }
 }

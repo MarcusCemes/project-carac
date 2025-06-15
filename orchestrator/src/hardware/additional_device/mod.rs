@@ -135,7 +135,7 @@ impl Device {
 
 #[async_trait]
 impl HardwareAgent for Device {
-    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+    async fn register(&self, sink: &mut DataSinkBuilder) {
         let DeviceConfig { name, channels, .. } = &self.inner.config;
         let stream = sink.register_stream(name.clone(), channels.clone()).await;
 
@@ -152,9 +152,14 @@ impl fmt::Display for Device {
 
 impl Inner {
     fn new(config: DeviceConfig, link: Link) -> Self {
+        let state = match &config.extra.initial_state {
+            Some(state) if state.len() == config.channels.len() => state.clone().into_boxed_slice(),
+            _ => vec![0.; config.channels.len()].into_boxed_slice(),
+        };
+
         Self {
             shared: Mutex::new(Shared {
-                state: vec![0.; config.channels.len()].into_boxed_slice(),
+                state,
                 stream: None,
             }),
             config,

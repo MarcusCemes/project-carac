@@ -57,7 +57,7 @@ class Joint(Serializable):
     joint: Sequence[float] = field(default_factory=lambda: 6 * [0.0])
 
     def toJSON(self):
-        return {"Joint": self.joint}
+        return self.joint
 
 
 class MotionKind(Serializable, IntEnum):
@@ -221,6 +221,11 @@ class SetToolOffset(Serializable):
 
 
 @dataclass
+class ResetMoveId(Serializable):
+    pass
+
+
+@dataclass
 class SetPowered(Serializable):
     powered: bool
 
@@ -246,6 +251,11 @@ class WaitSettled(Serializable):
 
 
 @dataclass
+class WaitProgress(Serializable):
+    progress: float
+
+
+@dataclass
 class ReturnHome(Serializable):
     type: MotionKind = MotionKind.Joint
 
@@ -265,7 +275,9 @@ class Robot(Serializable):
         | SetProfile
         | SetReporting
         | SetToolOffset
+        | ResetMoveId
         | WaitSettled
+        | WaitProgress
     )
 
 

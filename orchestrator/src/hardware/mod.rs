@@ -19,17 +19,17 @@ use crate::{
 };
 
 #[async_trait]
-pub trait HardwareAgent: Display + Send {
-    async fn register(&mut self, sink: &mut DataSinkBuilder);
+pub trait HardwareAgent: Display + Send + Sync {
+    async fn register(&self, sink: &mut DataSinkBuilder);
 
-    async fn error(&mut self) -> Result<(), Report> {
+    async fn error(&self) -> Result<(), Report> {
         Ok(())
     }
 
-    async fn clear_error(&mut self) {}
-    async fn bias(&mut self) {}
-    async fn start(&mut self) {}
-    async fn stop(&mut self) {}
+    async fn clear_error(&self) {}
+    async fn bias(&self) {}
+    async fn start(&self) {}
+    async fn stop(&self) {}
 }
 
 /* == HardwareContext == */
@@ -47,12 +47,12 @@ impl HardwareContext {
         HardwareContextBuilder::default()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut dyn HardwareAgent> {
-        dynamic(&mut self.additional_devices)
-            .chain(dynamic(&mut self.motion_capture))
-            .chain(dynamic(&mut self.load_cell))
-            .chain(dynamic(&mut self.robot_arm))
-            .chain(dynamic(&mut self.wind_shape))
+    pub fn iter(&self) -> impl Iterator<Item = &dyn HardwareAgent> {
+        dynamic(&self.additional_devices)
+            .chain(dynamic(&self.motion_capture))
+            .chain(dynamic(&self.load_cell))
+            .chain(dynamic(&self.robot_arm))
+            .chain(dynamic(&self.wind_shape))
     }
 }
 
@@ -147,12 +147,13 @@ impl HardwareInitializer {
     }
 }
 
-/// Helpful generic function that converts an iterable object of concrete HardwareAgent type (such as
-/// an Option or a Vec) and maps them to a trait object for dynamic dispatch using a v-table.
-fn dynamic<'a, T, U>(device: T) -> impl Iterator<Item = &'a mut dyn HardwareAgent>
+/// Helpful generic function that converts an iterable object of concrete
+/// HardwareAgent type (such as an Option or a Vec) and maps them to a trait
+/// object for dynamic dispatch using a v-table.
+fn dynamic<'a, T, U>(device: T) -> impl Iterator<Item = &'a dyn HardwareAgent>
 where
-    T: IntoIterator<Item = &'a mut U>,
+    T: IntoIterator<Item = &'a U>,
     U: HardwareAgent + 'a,
 {
-    device.into_iter().map(|d| d as &mut dyn HardwareAgent)
+    device.into_iter().map(|d| d as &dyn HardwareAgent)
 }

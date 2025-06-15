@@ -1,10 +1,16 @@
 from typing import Sequence
-from httpx import Client
+from httpx import Client, Request, Response
 
 from .instructions import Instruction
 
 DEFAULT_IP = "127.0.0.1"
 DEFAULT_PORT = 8080
+
+
+class OrchestratorError(Exception):
+    """Base class for Orchestrator-related exceptions."""
+
+    pass
 
 
 class Orchestrator:
@@ -23,39 +29,57 @@ class Orchestrator:
     # == Commands == #
 
     def execute(self, instructions: Sequence[Instruction]):
-        return self.handle_request(
-            self._client.post(
-                "/execute",
-                json={"instructions": [i.toJSON() for i in instructions]},
-            )
+        response = self._client.post(
+            "/execute",
+            json={"instructions": [i.toJSON() for i in instructions]},
         )
+
+        return self._handle_response(response)
 
     def record(self, instructions: Sequence[Instruction]):
-        return self.handle_request(
-            self._client.post(
-                "/record",
-                json={"instructions": [i.toJSON() for i in instructions]},
-            )
+        response = self._client.post(
+            "/record",
+            json={"instructions": [i.toJSON() for i in instructions]},
         )
+
+        return self._handle_response(response)
 
     def new_experiment(self, name: str):
-        return self.handle_request(
-            self._client.post(
-                "/new_experiment",
-                json={"name": name},
-            )
+        response = self._client.post(
+            "/new-experiment",
+            json={"name": name},
         )
 
+        return self._handle_response(response)
+
     def save_experiment(self):
-        return self._client.post("/save_experiment").raise_for_status()
+        response = self._client.post("/save-experiment")
+        return self._handle_response(response)
+
+    def start_recording(self):
+        response = self._client.post("/start-recording")
+        return self._handle_response(response)
+
+    def stop_recording(self):
+        response = self._client.post("/stop-recording")
+        return self._handle_response(response)
 
     def status(self) -> str:
-        return self._client.get("/status", timeout=3).text
+        response = self._client.get("/status")
+        return self._handle_response(response).text
+
+    def progress(self) -> float:
+        response = self._client.get("/progress")
+        return self._handle_response(response).json().get("progress")
 
     @staticmethod
-    def handle_request(request):
+    def _handle_response(request: Response):
         if request.is_error:
-            print(f"Request failed: {request.text}")
-            request.raise_for_status()
+            try:
+                msg = request.json()["message"]
+            except Exception:
+                msg = f"{request.text} (HTTP {request.status_code})"
+
+            raise OrchestratorError(msg)
 
         return request

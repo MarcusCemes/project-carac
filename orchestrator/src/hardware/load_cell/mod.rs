@@ -196,7 +196,7 @@ impl LoadCell {
 
 #[async_trait]
 impl HardwareAgent for LoadCell {
-    async fn register(&mut self, sink: &mut DataSinkBuilder) {
+    async fn register(&self, sink: &mut DataSinkBuilder) {
         let name = Self::NAME.to_owned();
         let channels = Self::CHANNELS.map(str::to_owned).to_vec();
         let stream = sink.register_stream(name, channels).await;
@@ -204,11 +204,11 @@ impl HardwareAgent for LoadCell {
         self.inner.shared.lock().await.stream = Some(stream);
     }
 
-    async fn bias(&mut self) {
+    async fn bias(&self) {
         let _ = self.command(Command::SetBias).await;
     }
 
-    async fn start(&mut self) {
+    async fn start(&self) {
         let instruction = match self.buffered_streaming {
             true => {
                 tracing::info!("Starting buffered streaming");
@@ -223,7 +223,7 @@ impl HardwareAgent for LoadCell {
         let _ = self.inner.instruction(instruction).await;
     }
 
-    async fn stop(&mut self) {
+    async fn stop(&self) {
         let _ = self.inner.instruction(Instruction::StopStreaming).await;
     }
 }

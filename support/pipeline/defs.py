@@ -4,29 +4,35 @@ MODULE_PATH = Path(__file__).parent
 
 # == Parameters == #
 
-LOADED_DATAFRAMES = MODULE_PATH / "data" / "input" / "loaded"
-UNLOADED_DATAFRAMES = MODULE_PATH / "data" / "input" / "unloaded"
+ANALYTICAL_MODELLING = False
+CORRECT_L_SWEEP = True
+
+# Paths
+INPUT_PATH = MODULE_PATH / "data" / "input"
+LOADED_DATAFRAMES = INPUT_PATH / "loaded"
+UNLOADED_DATAFRAMES = INPUT_PATH / "unloaded"
+FREE_FLIGHT_DATAFRAMES = INPUT_PATH / "free-flight"
+
 OUTPUT_DIR = MODULE_PATH / "data" / "output"
 LOG_FILE = "pipeline.log"
 
-# == Definitions == #
+
+# == Types == #
 
 Vec3 = tuple[float, float, float]
+
+
+# == Configuration == #
+
 EULER_SEQ = "xyz"  # Extrinsic XYZ Euler angles
 
 COM_OFFSET_M: Vec3 = (-1.05960e-03, -1.12684e-02, 1.85208e-01)
 
 TIME_COL = "time"
 
-WF_X = "robot/x"
-WF_Y = "robot/y"
-WF_Z = "robot/z"
-WF_POSITION = [WF_X, WF_Y, WF_Z]
-
-WF_RX = "robot/roll"
-WF_RY = "robot/pitch"
-WF_RZ = "robot/yaw"
-WF_ATTITUDE = [WF_RX, WF_RY, WF_RZ]
+WF_POSITION = ["robot/x", "robot/y", "robot/z"]
+WF_ATTITUDE = ["robot/roll", "robot/pitch", "robot/yaw"]
+WF_QUATERNION = ["qx", "qy", "qz", "qw"]
 
 LF_FORCE = ["load/fx", "load/fy", "load/fz"]
 LF_MOMENT = ["load/mx", "load/my", "load/mz"]
@@ -34,10 +40,22 @@ LF_MOMENT = ["load/mx", "load/my", "load/mz"]
 DF_FORCE = ["fx", "fy", "fz"]
 DF_MOMENT = ["mx", "my", "mz"]
 
+DF_FORCE_MODEL = ["fx_model", "fy_model", "fz_model"]
+DF_MOMENT_MODEL = ["mx_model", "my_model", "mz_model"]
+
+DRONE_ACT = [
+    "drone/motor",
+    "drone/left_wing",
+    "drone/right_wing",
+    "drone/elevator",
+    "drone/rudder",
+]
+
 DF_PQR = ["p", "q", "r"]
 DF_UVW = ["u", "v", "w"]
-DF_AERO_FORCES = ["drag", "side_force", "lift"]
 DF_AERO_ANGLES = ["alpha", "beta"]
+DF_AERO_FORCES = ["drag", "side_force", "lift"]
+DF_AERO_FORCES_MODEL = ["drag_model", "side_force_model", "lift_model"]
 
 WIND_COL = "wind/speed"
 WIND_VEL_LUT = {

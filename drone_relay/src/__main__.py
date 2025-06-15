@@ -42,7 +42,6 @@ class ReceiverProtocol(DatagramProtocol):
             return
 
         values = list(decoder.unpack(data[2:]))
-        values[1] = -values[1]
         msg = b"".join(map(encode_value, values))
 
         self._send(msg)

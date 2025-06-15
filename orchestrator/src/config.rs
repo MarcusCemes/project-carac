@@ -106,6 +106,7 @@ pub struct DeviceConfig {
 pub struct DeviceConfigExtra {
     pub channel_bounds: Option<Vec<(f32, f32)>>,
     pub transmit_rate: Option<u16>,
+    pub initial_state: Option<Vec<f32>>,
 }
 
 /* == Default implementations == */

@@ -91,7 +91,7 @@ pub fn export(opts: ExportOpts) -> Result<()> {
                     let run_name = Session::output_name(id, i, extension);
                     let run_path = output_dir.join(run_name);
 
-                    process_and_save_run(run, &streams, &opts, &run_path)?;
+                    process_and_save_run(run, streams, &opts, &run_path)?;
                     total_runs.fetch_add(1, Ordering::Relaxed);
                 }
             }

@@ -77,7 +77,7 @@ struct Buffer {
 
 impl DataSinkBuilder {
     pub async fn with_context(mut self, context: &mut HardwareContext) -> Self {
-        for agent in context.iter_mut() {
+        for agent in context.iter() {
             agent.register(&mut self).await;
         }
 

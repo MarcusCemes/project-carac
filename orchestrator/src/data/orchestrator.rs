@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use eyre::{ContextCompat, Result, eyre};
 use serde::{Deserialize, Serialize};
-use tokio::time::sleep;
+use tokio::{sync::Mutex, time::sleep};
 
 use crate::{
     audio::AudioPlayer,
@@ -21,7 +21,7 @@ use crate::{
 pub struct Orchestrator {
     context: HardwareContext,
     events: EventServer,
-    session: Session,
+    session: Mutex<Session>,
     sink: DataSink,
 }
 
@@ -59,7 +59,7 @@ impl Orchestrator {
         let events = EventServer::new(!config.sink.disable_audio);
 
         tracing::info!("Creating session");
-        let session = Session::open(path, streams)?;
+        let session = Mutex::new(Session::open(path, streams)?);
 
         Ok(Self {
             context,
@@ -69,25 +69,25 @@ impl Orchestrator {
         })
     }
 
-    pub async fn start(&mut self) {
-        for device in self.context.iter_mut() {
+    pub async fn start(&self) {
+        for device in self.context.iter() {
             tracing::debug!("Starting agent {device}");
             device.start().await;
         }
     }
 
-    pub async fn stop(&mut self) {
-        for device in self.context.iter_mut() {
+    pub async fn stop(&self) {
+        for device in self.context.iter() {
             tracing::debug!("Stopping agent {device}");
             device.stop().await;
         }
     }
 
-    pub fn context(&mut self) -> &mut HardwareContext {
-        &mut self.context
+    pub fn context(&self) -> &HardwareContext {
+        &self.context
     }
 
-    pub async fn execute(&mut self, instructions: Vec<Instruction>) -> Result<()> {
+    pub async fn execute(&self, instructions: Vec<Instruction>) -> Result<()> {
         for instruction in instructions {
             self.instruction(instruction).await?;
         }
@@ -95,7 +95,7 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub async fn record(&mut self, instructions: Vec<Instruction>) -> Result<Run> {
+    pub async fn record(&self, instructions: Vec<Instruction>) -> Result<Run> {
         self.sink.start_recording().await;
 
         self.execute(instructions).await.inspect_err(|_| {
@@ -105,12 +105,13 @@ impl Orchestrator {
         let run = self.sink.stop_recording().await;
         self.events.publish(Event::Complete);
 
-        self.session.append_run(&run).await?;
+        let mut session = self.session.lock().await;
+        session.append_run(&run).await?;
 
         Ok(run)
     }
 
-    async fn instruction(&mut self, instruction: Instruction) -> Result<()> {
+    async fn instruction(&self, instruction: Instruction) -> Result<()> {
         tracing::trace!("Executing {instruction:?}");
 
         match instruction {
@@ -125,25 +126,25 @@ impl Orchestrator {
             }
 
             Instruction::Load(command) => {
-                require_agent(&mut self.context.load_cell)?
+                require_agent(&self.context.load_cell)?
                     .command(command)
                     .await?;
             }
 
             Instruction::Robot(command) => {
-                require_agent(&mut self.context.robot_arm)?
+                require_agent(&self.context.robot_arm)?
                     .command(command)
                     .await?;
             }
 
             Instruction::Wind(command) => {
-                require_agent(&mut self.context.wind_shape)?
-                    .command(command, &mut self.events)
+                require_agent(&self.context.wind_shape)?
+                    .command(command, &self.events)
                     .await?;
             }
 
             Instruction::BiasAll => {
-                for device in self.context.iter_mut() {
+                for device in self.context.iter() {
                     device.bias().await;
                 }
             }
@@ -153,7 +154,7 @@ impl Orchestrator {
             }
 
             Instruction::Reset => {
-                for device in self.context.iter_mut() {
+                for device in self.context.iter() {
                     device.clear_error().await;
                 }
             }
@@ -162,25 +163,32 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub fn new_experiment(&mut self, name: String) -> Result<()> {
-        self.session.new_experiment(name)
+    pub async fn new_experiment(&self, name: String) -> Result<()> {
+        self.session.lock().await.new_experiment(name)
     }
 
-    pub fn save_experiment(&mut self) -> Result<()> {
-        self.session.save_experiment()
+    pub async fn save_experiment(&self) -> Result<()> {
+        self.session.lock().await.save_experiment()
     }
 
-    pub async fn start_recording(&mut self) {
+    pub async fn start_recording(&self) {
         self.sink.start_recording().await;
     }
 
-    pub async fn stop_recording(&mut self) -> Result<Run> {
+    pub async fn stop_recording(&self) -> Result<Run> {
         let run = self.sink.stop_recording().await;
         self.events.publish(Event::Complete);
 
-        self.session.append_run(&run).await?;
+        let mut session = self.session.lock().await;
+        session.append_run(&run).await?;
 
         Ok(run)
+    }
+
+    pub fn get_progress(&self) -> Result<f32> {
+        Ok(require_agent(&self.context.robot_arm)?
+            .get_progress()
+            .unwrap_or(0.))
     }
 }
 
@@ -206,8 +214,8 @@ impl EventServer {
         Self { player }
     }
 
-    pub fn publish(&mut self, event: Event) {
-        if let Some(player) = &mut self.player {
+    pub fn publish(&self, event: Event) {
+        if let Some(player) = &self.player {
             let _ = player.queue(event);
         }
     }
@@ -215,8 +223,8 @@ impl EventServer {
 
 /* == Misc == */
 
-fn require_agent<T: HardwareAgent>(module: &mut Option<T>) -> Result<&mut T> {
+fn require_agent<T: HardwareAgent>(module: &Option<T>) -> Result<&T> {
     module
-        .as_mut()
+        .as_ref()
         .ok_or_else(|| eyre!("Hardware {} not available", type_name::<T>()))
 }
