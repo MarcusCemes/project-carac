@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="sendError">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="code" type="num" xsi:type="element" />
+      <Parameter name="argument" type="num" xsi:type="element" />
+    </Parameters>
+    <Locals>
+      <Local name="buffer" type="num" xsi:type="array" size="5" />
+    </Locals>
+    <Code><![CDATA[begin
+  buffer[0] = MAGIC_HEADER
+  buffer[1] = 129
+  buffer[2] = code
+
+  toBinary(argument, 1, "2b", buffer[3])
+
+  sioSet(socket, buffer)
+end
+]]></Code>
+  </Program>
+</Programs>

@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="decodeDesc">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="value" type="mdesc" xsi:type="element" use="reference" />
+      <Parameter name="buffer" type="num" xsi:type="array" use="reference" />
+    </Parameters>
+    <Locals>
+      <Local name="decodeBuffer" type="num" xsi:type="array" size="3" />
+    </Locals>
+    <Code><![CDATA[begin
+  fromBinary(buffer, 8, "4.0b", decodeBuffer)
+
+  value.tvel = decodeBuffer[0]
+  value.rvel = decodeBuffer[1]
+
+  fromBinary(buffer[8], 3, "1", decodeBuffer)
+  value.accel = decodeBuffer[0]
+  value.vel   = decodeBuffer[1]
+  value.decel = decodeBuffer[2]
+
+  logMsg("D: (" + toString("3", value.tvel) + ", " + toString("3", value.rvel) + ", " + toString("3", value.accel) + ", " + toString("3", value.vel) + ", " + toString("3", value.decel) + ")")
+end
+]]></Code>
+  </Program>
+</Programs>

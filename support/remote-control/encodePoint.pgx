@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="encodePoint">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="value" type="point" xsi:type="element" use="reference" />
+      <Parameter name="buffer" type="num" xsi:type="array" use="reference" />
+    </Parameters>
+    <Locals>
+      <Local name="elements" type="num" xsi:type="array" size="6" />
+    </Locals>
+    <Code><![CDATA[begin
+  elements[0] = value.trsf.x
+  elements[1] = value.trsf.y
+  elements[2] = value.trsf.z
+  elements[3] = value.trsf.rx
+  elements[4] = value.trsf.ry
+  elements[5] = value.trsf.rz
+
+  toBinary(elements, 6, "4.0b", buffer)
+end
+]]></Code>
+  </Program>
+</Programs>

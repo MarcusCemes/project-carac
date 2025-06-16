@@ -1,0 +1,31 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://www.staubli.com/robotics/VAL3/Project/3">
+  <Parameters version="s8.10.3Cs9_BS2093" stackSize="5000" millimeterUnit="true" />
+  <Programs>
+    <Program file="decodeBlend.pgx" />
+    <Program file="decodeConfig.pgx" />
+    <Program file="decodeDesc.pgx" />
+    <Program file="decodeLocation.pgx" />
+    <Program file="decodePose.pgx" />
+    <Program file="decodeTool.pgx" />
+    <Program file="encodeJoint.pgx" />
+    <Program file="encodePoint.pgx" />
+    <Program file="init.pgx" />
+    <Program file="motionReporter.pgx" />
+    <Program file="motionSupervisor.pgx" />
+    <Program file="motionWorker.pgx" />
+    <Program file="movingReporter.pgx" />
+    <Program file="sendAck.pgx" />
+    <Program file="sendError.pgx" />
+    <Program file="sendMoving.pgx" />
+    <Program file="sendPowerOff.pgx" />
+    <Program file="sendStatus.pgx" />
+    <Program file="socketHandler.pgx" />
+    <Program file="start.pgx" />
+    <Program file="stop.pgx" />
+  </Programs>
+  <Database>
+    <Data file="RemoteControl.dtx" />
+  </Database>
+  <Libraries />
+</Project>

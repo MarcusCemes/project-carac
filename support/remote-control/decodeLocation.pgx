@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="decodeLocation">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="value" type="point" xsi:type="element" use="reference" />
+      <Parameter name="buffer" type="num" xsi:type="array" use="reference" />
+    </Parameters>
+    <Locals>
+      <Local name="decodeBuffer" type="num" xsi:type="array" size="6" />
+    </Locals>
+    <Code><![CDATA[begin
+  fromBinary(buffer, 24, "4.0b", decodeBuffer)
+
+  value.trsf = {decodeBuffer[0], decodeBuffer[1], decodeBuffer[2], decodeBuffer[3], decodeBuffer[4], decodeBuffer[5]}
+
+  logMsg("P: (" + toString("3", value.trsf.x) + ", " + toString("3", value.trsf.y) + ", " + toString("3", value.trsf.z) + ")  R: (" + toString("3", value.trsf.rx) + ", " + toString("3", value.trsf.ry) + ", " + toString("3", value.trsf.rz) + ")")
+end
+]]></Code>
+  </Program>
+</Programs>

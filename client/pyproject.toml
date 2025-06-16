@@ -1,0 +1,22 @@
+[project]
+name = "carac"
+version = "0.1.0"
+description = "Collection of CARAC tools for data analysis and visualization."
+dependencies = [
+    "fastparquet>=2024.11",
+    "httpx>=0.28",
+    "matplotlib>=3.10",
+    "noise>=1.2",
+    "numpy>=2.3",
+    "pandas>=2.3",
+    "rich>=14.0",
+    "scipy>=1.15",
+    "seaborn>=0.13",
+]
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pyright]
+reportWildcardImportFromLibrary = false
