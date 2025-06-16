@@ -1,8 +1,8 @@
+from pathlib import Path
 from pandas import DataFrame, read_parquet
 
 from .dataset import ExperimentComposition
 from .dataframe import *
-from .defs import *
 from .process import process_dataframe
 
 

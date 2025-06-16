@@ -4,6 +4,8 @@ config.yaml
 __pycache__/
 *.egg-info
 
+data/*
+!data/.gitkeep
 
 *.csv
 *.dat

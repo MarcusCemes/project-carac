@@ -6,8 +6,8 @@ ROT_ANGLE_SEQ = "xyz"  # Extrinsic XYZ Euler angles
 class Columns(EnumDict):
     Time = "time"
 
-    RobotPos = ["robot/x", "robot/y", "robot/z"]
-    RobotRot = ["robot/roll", "robot/pitch", "robot/yaw"]
+    WorldPosition = ["robot/x", "robot/y", "robot/z"]
+    WorldRotation = ["robot/roll", "robot/pitch", "robot/yaw"]
     Attitude = ["qx", "qy", "qz", "qw"]
 
     LoadForce = ["load/fx", "load/fy", "load/fz"]
@@ -15,10 +15,10 @@ class Columns(EnumDict):
 
     Wind = "wind/speed"
 
-    DroneForce = ["fx", "fy", "fz"]
-    DroneMoment = ["mx", "my", "mz"]
-    DroneForceModel = ["fx_model", "fy_model", "fz_model"]
-    DroneMomentModel = ["mx_model", "my_model", "mz_model"]
+    BodyForce = ["fx", "fy", "fz"]
+    BodyMoment = ["mx", "my", "mz"]
+    BodyForceModel = ["fx_model", "fy_model", "fz_model"]
+    BodyMomentModel = ["mx_model", "my_model", "mz_model"]
 
     DroneActuators = [
         "drone/motor",

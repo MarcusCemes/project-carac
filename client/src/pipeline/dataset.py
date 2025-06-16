@@ -3,7 +3,7 @@ from pathlib import Path
 from itertools import cycle
 from typing import TypeVar, List
 
-from .defs import *
+from .config import *
 
 T = TypeVar("T")
 
@@ -21,20 +21,28 @@ class ExperimentComposition:
     negative: list[Path]
 
 
-def load_datasets():
+def load_datasets() -> list[tuple[list[ExperimentComposition], str]]:
     decoupled, coupled = load_axis_datasets()
     free_flight = load_free_flight_dataset()
+    free_flight_extended = load_free_flight_extended_dataset()
+    plunge = load_plunge_dataset()
 
-    return (decoupled, coupled, free_flight)
+    return [
+        (decoupled, "decoupled"),
+        (coupled, "coupled"),
+        (free_flight, "free-flight"),
+        (free_flight_extended, "free-flight-extended"),
+        (plunge, "plunge"),
+    ]
 
 
 def load_axis_datasets():
     # Load the sessions and their respective coupled and decoupled experiments.
-    session_loaded = load_experiments(LOADED_DATAFRAMES)
+    session_loaded = load_experiments(INPUT_PATH / "axis" / "loaded")
     loaded_decoupled = session_loaded[0:486]
     loaded_coupled = session_loaded[486:558]
 
-    session_unloaded = load_experiments(UNLOADED_DATAFRAMES)
+    session_unloaded = load_experiments(INPUT_PATH / "axis" / "unloaded")
     unloaded_decoupled = session_unloaded[0:18]
     unloaded_coupled = session_unloaded[18:26]
 
@@ -79,7 +87,42 @@ def load_axis_datasets():
 
 
 def load_free_flight_dataset():
-    files = load_experiments(FREE_FLIGHT_DATAFRAMES)
+    [a, b] = load_experiments(INPUT_PATH / "free-flight" / "unloaded")
+
+    unloaded_calibrated = CalibratedExperiment(b, a)
+
+    files = load_experiments(INPUT_PATH / "free-flight" / "loaded")
+    symmetric_files = files[:8]
+    asymmetric_files = files[8:20]
+    throttle_files = files[20:22]
+
+    symmetric_calibrations = pair_with_calibration(symmetric_files, stride=4)
+    throttle_calibrations = pair_with_calibration(throttle_files, stride=1)
+
+    # I did an oops with the asymmetric runs, the list needs to be swapped
+    asymmetric_files = [*asymmetric_files[6:], *asymmetric_files[:6]]
+    asymmetric_calibrations = pair_with_calibration(asymmetric_files, stride=6)
+
+    assert len(symmetric_calibrations) == 4
+    assert len(asymmetric_calibrations) == 6
+    assert len(throttle_calibrations) == 1
+
+    return [
+        ExperimentComposition(
+            experiment=experiment.actual,
+            positive=[unloaded_calibrated.calibration],
+            negative=[experiment.calibration, unloaded_calibrated.actual],
+        )
+        for experiment in [
+            *symmetric_calibrations,
+            *asymmetric_calibrations,
+            *throttle_calibrations,
+        ]
+    ]
+
+
+def load_free_flight_extended_dataset():
+    files = load_experiments(INPUT_PATH / "free-flight-extended")
 
     calibration = files.pop()
 
@@ -91,6 +134,19 @@ def load_free_flight_dataset():
         )
         for experiment in files
     ]
+
+
+def load_plunge_dataset():
+    loaded_files = load_experiments(INPUT_PATH / "plunge" / "loaded")
+    unloaded_files = load_experiments(INPUT_PATH / "plunge" / "unloaded")
+
+    loaded_calibrated = pair_with_calibration(loaded_files, stride=8)
+    unloaded_calibrated = pair_with_calibration(unloaded_files, stride=8)
+
+    compositions = compose_experiment_loads(unloaded_calibrated, loaded_calibrated)
+
+    assert len(compositions) == 8
+    return compositions
 
 
 # == Utilities == #

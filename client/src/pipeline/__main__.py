@@ -5,27 +5,20 @@ from typing import Sequence
 from rich import print as rprint
 from rich.progress import Progress
 
+from .config import *
 from .dataset import load_datasets, ExperimentComposition
-from .defs import *
 from .utils import *
 
 
 def main() -> None:
     rprint("[b]CARAC Pipeline[/] - Automated pipeline for processing CARAC datasets\n")
 
-    (decoupled, coupled, free_flight) = load_datasets()
-
-    jobs = [
-        (decoupled, "decoupled"),
-        (coupled, "coupled"),
-        (free_flight, "free_flight"),
-    ]
+    datasets = load_datasets()
 
     with ProcessPoolExecutor() as pool:
-
-        for dataset, name in jobs:
+        for dataset, name in datasets:
             process_dataset(name, dataset, pool)
-            rprint(f"Processed [b]{name}[/] dataset with {len(dataset)}")
+            rprint(f"Processed [b]{name}[/] dataset with {len(dataset)} compositions")
 
     rprint("[green b]All datasets processed successfully[/]")
 
@@ -37,12 +30,12 @@ def process_dataset(
 ) -> None:
     """Processes a dataset of ExperimentComposition objects."""
 
-    output_path = Path(OUTPUT_DIR) / name
+    output_path = DATA_PATH / "output" / name
     output_path.mkdir(parents=True, exist_ok=True)
 
     warm = False
 
-    with open(output_path / LOG_FILE, "w") as log:
+    with open(output_path / "pipeline.log", "w") as log:
         with Progress(transient=True) as progress:
             task = progress.add_task("Warming up the pool...", total=None)
             jobs = ((output_path, composition) for composition in compositions)

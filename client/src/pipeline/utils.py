@@ -1,4 +1,4 @@
-from .defs import *
+from .config import WindSpeedLut
 
 
 def lookup_wind(speed: float) -> float:

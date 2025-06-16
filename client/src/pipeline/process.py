@@ -10,7 +10,7 @@ from numpy import (
 )
 from scipy.spatial.transform import Rotation
 
-from .defs import *
+from .config import *
 from .dataframe import *
 from .utils import *
 
@@ -29,11 +29,11 @@ def process_dataframe(df: DataFrame) -> None:
     correct_sweep(df)
     transform_wrench(df)
     add_body_frame_kinematics(df)
-    add_aero_forces(df, Columns.DroneForce, Columns.AeroForces)
+    add_aero_forces(df, Columns.BodyForce, Columns.AeroForces)
 
     if ANALYTICAL_MODELLING and has_drone_actuation(df):
         add_analytical_model(df)
-        add_aero_forces(df, Columns.DroneForceModel, Columns.DroneMomentModel)
+        add_aero_forces(df, Columns.BodyForceModel, Columns.BodyMomentModel)
 
 
 def correct_sweep(df: DataFrame) -> None:
@@ -42,7 +42,7 @@ def correct_sweep(df: DataFrame) -> None:
     readability in the drone relay program.
     """
 
-    if CORRECT_L_SWEEP:
+    if CORRECT_L_SWEEP and has_drone_actuation(df):
         drone_left_wing = Columns.DroneActuators[1]
         df[drone_left_wing] *= -1.0
 
@@ -60,14 +60,14 @@ def transform_wrench(df: DataFrame) -> None:
     col_map = dict(
         zip(
             [*Columns.LoadForce, *Columns.LoadMoment],
-            [*Columns.DroneForce, *Columns.DroneMoment],
+            [*Columns.BodyForce, *Columns.BodyMoment],
         )
     )
 
     df.rename(columns=col_map, inplace=True)
 
     # Apply the moment transform correction
-    df[Columns.DroneMoment] -= moment_correction
+    df[Columns.BodyMoment] -= moment_correction
 
 
 def add_body_frame_kinematics(df: DataFrame) -> None:
@@ -80,7 +80,7 @@ def add_body_frame_kinematics(df: DataFrame) -> None:
     dt = diff(times)  # type: ignore
 
     # Create rotation objects for the drone's attitude
-    rot = Rotation.from_euler(ROT_ANGLE_SEQ, df[Columns.RobotRot].to_numpy())
+    rot = Rotation.from_euler(ROT_ANGLE_SEQ, df[Columns.WorldRotation].to_numpy())
 
     # Save the quaternion representation of the drone's attitude (x, y, z, w)
     df[Columns.Attitude] = rot.as_quat(scalar_first=False)
@@ -98,7 +98,7 @@ def add_body_frame_kinematics(df: DataFrame) -> None:
 
     # 2. Calculate Body-Frame Relative Velocity (u, v, w)
     #   a) Drone velocity in world frame
-    positions = df[Columns.RobotPos].to_numpy()
+    positions = df[Columns.WorldPosition].to_numpy()
     vel_drone_world = zeros_like(positions)
     vel_drone_world[1:-1] = (positions[2:] - positions[:-2]) / (times[2:] - times[:-2])[
         :, newaxis
@@ -154,9 +154,9 @@ def add_analytical_model(df: DataFrame) -> None:
 
     # --- 1. Extract the data from the DataFrame into 2D NumPy arrays ---
     # This is more efficient than accessing the DataFrame in a loop.
-    positions = df[Columns.RobotPos].to_numpy()
+    positions = df[Columns.WorldPosition].to_numpy()
     attitudes = df[Columns.Attitude].to_numpy()
-    angular_velocities = df[Columns.AeroAngles].to_numpy()
+    angular_velocities = df[Columns.AeroAngularVelocity].to_numpy()
     relative_velocities = df[Columns.AeroVelocity].to_numpy()
     drone_actuators = df[Columns.DroneActuators].to_numpy()
 
@@ -189,8 +189,8 @@ def add_analytical_model(df: DataFrame) -> None:
     # --- 4. Assign the collected results back to the DataFrame ---
     # The lists of 1D arrays are converted to 2D NumPy arrays and then
     # assigned to the new columns. Pandas handles the assignment correctly.
-    df[Columns.DroneForceModel] = forces_list
-    df[Columns.DroneMomentModel] = moments_list
+    df[Columns.BodyForceModel] = forces_list
+    df[Columns.BodyMomentModel] = moments_list
 
 
 def has_drone_actuation(df: DataFrame) -> bool:
