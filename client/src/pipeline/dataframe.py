@@ -1,5 +1,7 @@
 from enum import EnumDict
 
+from pandas import DataFrame
+
 ROT_ANGLE_SEQ = "xyz"  # Extrinsic XYZ Euler angles
 
 
@@ -32,3 +34,11 @@ class Columns(EnumDict):
     AeroVelocity = ["u", "v", "w"]
     AeroAngles = ["alpha", "beta"]
     AeroForces = ["drag", "side_force", "lift"]
+    AeroForcesModel = ["drag_model", "side_force_model", "lift_model"]
+
+    ForcePrediction = ["fx_pred", "fy_pred", "fz_pred"]
+    MomentPrediction = ["mx_pred", "my_pred", "mz_pred"]
+
+
+def has_columns(df: DataFrame, columns: list[str]) -> bool:
+    return all(col in df.columns for col in columns)

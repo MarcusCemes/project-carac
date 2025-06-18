@@ -3,6 +3,10 @@
     {
       "name": "rclpy",
       "depth": 8
+    },
+    {
+      "name": "scipy",
+      "depth": 8
     }
   ],
   "python.analysis.diagnosticSeverityOverrides": {
@@ -10,5 +14,6 @@
   },
   "rust-analyzer.cargo.extraEnv": {
     "CARGO_TARGET_DIR": "target-lsp"
-  }
+  },
+  "cmake.ignoreCMakeListsMissing": true
 }

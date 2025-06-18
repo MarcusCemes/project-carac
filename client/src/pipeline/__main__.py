@@ -1,6 +1,6 @@
 from concurrent.futures import ProcessPoolExecutor
 from io import TextIOWrapper
-from typing import Sequence
+from typing import Any, Sequence
 
 from rich import print as rprint
 from rich.progress import Progress
@@ -15,10 +15,14 @@ def main() -> None:
 
     datasets = load_datasets()
 
-    with ProcessPoolExecutor() as pool:
+    if USE_POOL:
+        with ProcessPoolExecutor() as pool:
+            for dataset, name in datasets:
+                process_dataset(name, dataset, pool.map)
+
+    else:
         for dataset, name in datasets:
-            process_dataset(name, dataset, pool)
-            rprint(f"Processed [b]{name}[/] dataset with {len(dataset)} compositions")
+            process_dataset(name, dataset, map)
 
     rprint("[green b]All datasets processed successfully[/]")
 
@@ -26,7 +30,7 @@ def main() -> None:
 def process_dataset(
     name: str,
     compositions: Sequence[ExperimentComposition],
-    pool: ProcessPoolExecutor,
+    map_fn: Any,
 ) -> None:
     """Processes a dataset of ExperimentComposition objects."""
 
@@ -38,11 +42,16 @@ def process_dataset(
     with open(output_path / "pipeline.log", "w") as log:
         with Progress(transient=True) as progress:
             task = progress.add_task("Warming up the pool...", total=None)
-            jobs = ((output_path, composition) for composition in compositions)
+            jobs = (
+                (output_path, composition)
+                for composition in compositions
+                if not FILTER
+                or any(composition.experiment.name.startswith(f) for f in FILTER)
+            )
 
             from .worker import process_composition
 
-            for composition in pool.map(process_composition, jobs):
+            for composition in map_fn(process_composition, jobs):
                 if not warm:
                     progress.update(
                         task,
@@ -54,6 +63,8 @@ def process_dataset(
 
                 append_composition_to_log(composition, log)
                 progress.advance(task, 1)
+
+    rprint(f"Processed [b]{name}[/] dataset with {len(compositions)} compositions")
 
 
 def append_composition_to_log(

@@ -1,4 +1,4 @@
-from pathlib import Path
+from time import time
 
 from .dataset import FreeFlightDataset
 from .defs import *
@@ -6,14 +6,12 @@ from .train import train
 
 
 def main():
-    input_dir = Path(__file__).parent / DATA_DIR / "input"
-    files = list(input_dir.glob("*.parquet"))
+    files = [*INPUT_DIR.glob("*.parquet")]
 
     dataset = FreeFlightDataset(files)
 
-    output_dir = Path(__file__).parent / DATA_DIR / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "trained_model.pth"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / f"{int(time())}_weights.pth"
 
     train(dataset, output_path)
 

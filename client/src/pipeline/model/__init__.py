@@ -23,28 +23,27 @@ def compute_analytical_forces(
     assert relative_velocity.shape == (3,)
     assert actuation.shape == (5,)
 
+    input = map_actuation(actuation)
+    omega = _model.motor_throttle_to_omega(input[0])
+    drone_state = np.array([omega, input[1], 0, input[2], 0, 0, 0])
+
     state = np.concatenate(
-        [
-            position,
-            relative_velocity,
-            attitude,
-            angular_velocity,
-            np.zeros(7),
-        ]
+        [position, relative_velocity, attitude, angular_velocity, drone_state]
     )
 
     assert state.shape == (20,)
 
-    actuation = correct_input(actuation)
-
-    F_casadi, M_casadi = _model.force_moment_cg_total(state, actuation)
+    F_casadi, M_casadi = _model.force_moment_cg_total(state, input)
 
     return np.array(F_casadi).flatten(), np.array(M_casadi).flatten()
 
 
-def correct_input(input: NDArray) -> NDArray:
+def map_actuation(input: NDArray) -> NDArray:
     input = input.copy()
-    input[0] = 0.5 * input[0] + 0.5  # Normalize motor speed to [0, 1]
+
+    # Normalise motor from [-1, 1] to [0.05, 1]
+    t = (input[0] + 1) / 2
+    input[0] = 0.05 + t * (1 - 0.05)
 
     return input
 

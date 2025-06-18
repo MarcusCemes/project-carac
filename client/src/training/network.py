@@ -3,9 +3,6 @@ from torch.nn import Linear, Module, ReLU, Sequential
 
 
 class SimpleFeedForwardNN(Module):
-    """
-    A simple, configurable feed-forward neural network.
-    """
 
     def __init__(
         self,

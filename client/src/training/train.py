@@ -78,6 +78,9 @@ def train(dataset: FreeFlightDataset, save_path: Path):
     print("Saving model to", save_path)
     torch.save(model.state_dict(), save_path)
 
+    with open(save_path.with_suffix(".txt"), "w") as f:
+        f.write(str(model))
+
 
 def split_dataset(dataset: FreeFlightDataset, val_split: float = VAL_SPLIT):
     val_size = int(len(dataset) * val_split)

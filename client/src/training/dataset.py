@@ -6,6 +6,8 @@ from scipy.spatial.transform import Rotation
 from torch import float32, tensor, Tensor
 from torch.utils.data import Dataset
 
+from pipeline.dataframe import ROT_ANGLE_SEQ, has_columns
+
 from .defs import *
 
 
@@ -35,7 +37,12 @@ class FreeFlightDataset(Dataset[tuple[Tensor, Tensor]]):
 def load_parquet(path: Path) -> DataFrame:
     df = read_parquet(path)
 
-    rotation = Rotation.from_euler(EULER_ORDER, df[ATTITUDE_COLUMNS].to_numpy())
-    df[ATTITUDE_QUAT_COLUMNS] = rotation.as_quat()
+    if not has_columns(df, Columns.Attitude):
+        rotation = Rotation.from_euler(
+            ROT_ANGLE_SEQ,
+            df[Columns.WorldRotation].to_numpy(),
+        )
+
+        df[Columns.Attitude] = rotation.as_quat()
 
     return df

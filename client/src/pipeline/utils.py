@@ -6,4 +6,8 @@ def lookup_wind(speed: float) -> float:
         return WindSpeedLut[speed]
 
     except KeyError:
+        for key, value in WindSpeedLut.items():
+            if abs(key - speed) < 1e-6:
+                return value
+
         raise ValueError(f"Wind speed {speed} not found in LUT.")

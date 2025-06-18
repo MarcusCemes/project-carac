@@ -1,13 +1,7 @@
 from pandas import DataFrame
-from numpy import (
-    arctan2,
-    array,
-    cross,
-    diff,
-    newaxis,
-    vstack,
-    zeros_like,
-)
+import numpy as np
+from scipy.linalg import norm
+from scipy.signal import butter, filtfilt
 from scipy.spatial.transform import Rotation
 
 from .config import *
@@ -54,7 +48,7 @@ def transform_wrench(df: DataFrame) -> None:
     """
 
     forces = df[Columns.LoadForce].to_numpy()
-    moment_correction = cross(array(COM_OFFSET_M), forces)
+    moment_correction = np.cross(np.array(COM_OFFSET_M), forces)
 
     # Rename columns from world frame to drone frame
     col_map = dict(
@@ -71,58 +65,77 @@ def transform_wrench(df: DataFrame) -> None:
 
 
 def add_body_frame_kinematics(df: DataFrame) -> None:
-    """Computes body-frame kinematics (p,q,r), (u,v,w), and (alpha,beta)."""
 
     df.sort_values(by=Columns.Time, inplace=True)
     df.reset_index(drop=True, inplace=True)
 
     times = df[Columns.Time].to_numpy()
-    dt = diff(times)  # type: ignore
+    fs = 1.0 / np.mean(np.diff(times))
 
-    # Create rotation objects for the drone's attitude
-    rot = Rotation.from_euler(ROT_ANGLE_SEQ, df[Columns.WorldRotation].to_numpy())
+    # --- 1. Low-Pass Filter the Source Euler Angles ---
 
-    # Save the quaternion representation of the drone's attitude (x, y, z, w)
-    df[Columns.Attitude] = rot.as_quat(scalar_first=False)
+    # a) Get Euler angles and unwrap them to create a continuous signal
+    euler_angles_rad = df[Columns.WorldRotation].to_numpy()
+    unwrapped_euler = np.unwrap(euler_angles_rad, axis=0)
 
-    # 1. Calculate Body-Frame Angular Velocity (p, q, r)
-    delta_r = rot[1:] * rot[:-1].inv()
+    # b) Design the Butterworth low-pass filter
+    cutoff_hz = 10.0
+    filter_order = 4
+
+    # The butterworth function requires the cutoff frequency to be normalized by the Nyquist frequency (fs / 2)
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff_hz / nyquist
+
+    if 0 < normal_cutoff < 1:
+        b, a = butter(filter_order, normal_cutoff, btype="low", analog=False)
+
+        # c) Apply the filter using 'filtfilt' for zero phase shift (no time delay)
+        unwrapped_euler = filtfilt(b, a, unwrapped_euler, axis=0)
+
+    # --- 2. Calculate PQR using Quaternion Central Derivative ---
+
+    # a) Create new, clean Rotation objects from the filtered Euler angles
+    # Note: We can use the unwrapped angles directly; `from_euler` handles it correctly.
+    rot = Rotation.from_euler(ROT_ANGLE_SEQ, unwrapped_euler)
+
+    # b) Save the filtered quaternion representation
+    df[Columns.Attitude] = rot.as_quat()
+
+    # c) Apply the stable central difference method
+    dt_central = times[2:] - times[:-2]
+    delta_r = rot[2:] * rot[:-2].inv()  # World-frame difference
     rot_vecs_world = delta_r.as_rotvec()
-    angular_velocity_world = rot_vecs_world / dt[:, newaxis]
-    angular_velocity_body = rot[:-1].inv().apply(angular_velocity_world)
+    angular_velocity_world = rot_vecs_world / dt_central[:, np.newaxis]
+    angular_velocity_body = rot[1:-1].inv().apply(angular_velocity_world)
 
-    # Pad the first row to maintain shape
-    df[Columns.AeroAngularVelocity] = vstack(
-        [angular_velocity_body[0], angular_velocity_body]
-    )
+    # d) Pad the result to match the original dataframe shape
+    padded_pqr = np.pad(angular_velocity_body, ((1, 1), (0, 0)), "edge")
+    df[Columns.AeroAngularVelocity] = padded_pqr
 
-    # 2. Calculate Body-Frame Relative Velocity (u, v, w)
-    #   a) Drone velocity in world frame
+    # --- 3. Calculate UVW and Aero Angles using the SAME filtered data ---
+    # This ensures all derived quantities are consistent.
+
     positions = df[Columns.WorldPosition].to_numpy()
-    vel_drone_world = zeros_like(positions)
-    vel_drone_world[1:-1] = (positions[2:] - positions[:-2]) / (times[2:] - times[:-2])[
-        :, newaxis
-    ]
-    vel_drone_world[0] = (positions[1] - positions[0]) / dt[0]
-    vel_drone_world[-1] = (positions[-1] - positions[-2]) / dt[-1]
+    vel_drone_world = np.zeros_like(positions)
+    vel_drone_world[1:-1] = (positions[2:] - positions[:-2]) / dt_central[:, np.newaxis]
+    vel_drone_world[0] = (positions[1] - positions[0]) / (times[1] - times[0])
+    vel_drone_world[-1] = (positions[-1] - positions[-2]) / (times[-1] - times[-2])
 
-    #   b) Wind velocity in world frame
-    wind_speeds = df[Columns.Wind].map(WindSpeedLut)
-    wind_dir_norm = array([-1.0, 0.0, 0.0])  # Assumes headwind along world -X
-    vel_wind_world = wind_speeds.to_numpy()[:, newaxis] * wind_dir_norm
+    wind_speeds = df[Columns.Wind].map(lookup_wind)
+    wind_dir_norm = np.array([-1.0, 0.0, 0.0])
+    vel_wind_world = wind_speeds.to_numpy()[:, np.newaxis] * wind_dir_norm
 
-    #   c) Air velocity in world frame, then rotated to body frame
     vel_air_world = vel_drone_world - vel_wind_world
     vel_air_body = rot.inv().apply(vel_air_world)
     df[Columns.AeroVelocity] = vel_air_body
 
-    # 3. Calculate Aerodynamic Angles (alpha, beta)
     u, v, w = vel_air_body.T
+    total_airspeed = norm(vel_air_body, axis=1)
 
-    alpha = -arctan2(w, u)
-    beta = arctan2(v, u)
-
-    df[Columns.AeroAngles] = vstack([alpha, beta]).T
+    epsilon = 1e-9
+    alpha = np.arctan2(-w, u)
+    beta = np.arcsin(v / (total_airspeed + epsilon))
+    df[Columns.AeroAngles] = np.vstack([alpha, beta]).T
 
 
 def add_aero_forces(
@@ -135,7 +148,9 @@ def add_aero_forces(
     forces_body = df[force_cols].to_numpy()
     alpha, beta = df[Columns.AeroAngles].to_numpy().T
 
-    rotation = Rotation.from_euler("xyz", -array([zeros_like(alpha), alpha, beta]).T)
+    rotation = Rotation.from_euler(
+        "XYZ", -np.array([np.zeros_like(alpha), alpha, beta]).T
+    )
     aero_forces = rotation.apply(forces_body)
 
     # Give a positive drag profile
@@ -146,32 +161,25 @@ def add_aero_forces(
 
 def add_analytical_model(df: DataFrame) -> None:
     """
-    Computes the analytical model of the drone's aerodynamic forces for each row
-    in the DataFrame by calling a non-vectorized function.
+    Computes the analytical model and applies a correctly designed low-pass
+    Butterworth filter to the output forces and moments.
     """
-    # Import the non-vectorized function that works on single rows
     from .model import compute_analytical_forces
 
-    # --- 1. Extract the data from the DataFrame into 2D NumPy arrays ---
-    # This is more efficient than accessing the DataFrame in a loop.
     positions = df[Columns.WorldPosition].to_numpy()
     attitudes = df[Columns.Attitude].to_numpy()
     angular_velocities = df[Columns.AeroAngularVelocity].to_numpy()
     relative_velocities = df[Columns.AeroVelocity].to_numpy()
     drone_actuators = df[Columns.DroneActuators].to_numpy()
 
-    # Get the number of rows to process
-    num_rows = len(df)
+    # Override with fake actuators for testing purposes
+    # drone_actuators = np.repeat(np.array([-1, -1, -1, 0, 0]), df.shape[0]).reshape(-1, 5)
 
-    # --- 2. Prepare empty lists to store the results from each row ---
+    num_rows = len(df)
     forces_list = []
     moments_list = []
 
-    # print(f"Applying analytical model to {num_rows} data points...")
-
-    # --- 3. Loop through each row index ---
     for i in range(num_rows):
-        # Call the non-vectorized function with the data for the current row (i)
         force, moment = compute_analytical_forces(
             positions[i],
             attitudes[i],
@@ -179,18 +187,13 @@ def add_analytical_model(df: DataFrame) -> None:
             relative_velocities[i],
             drone_actuators[i],
         )
-
-        # Append the results to the lists
         forces_list.append(force)
         moments_list.append(moment)
 
-    # print("Computation complete.")
-
-    # --- 4. Assign the collected results back to the DataFrame ---
-    # The lists of 1D arrays are converted to 2D NumPy arrays and then
-    # assigned to the new columns. Pandas handles the assignment correctly.
     df[Columns.BodyForceModel] = forces_list
     df[Columns.BodyMomentModel] = moments_list
+
+    add_aero_forces(df, Columns.BodyForceModel, Columns.AeroForcesModel)
 
 
 def has_drone_actuation(df: DataFrame) -> bool:
