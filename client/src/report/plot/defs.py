@@ -4,10 +4,10 @@ from typing import TypedDict
 import matplotlib.pyplot as plt
 
 
-DATA_PATH = (Path(__file__).parent / "../../../../data-old").resolve()
+DATA_PATH = (Path(__file__).parent / "../../../../data").resolve()
 
-INPUT_PATH = DATA_PATH / "input"
-OUTPUT_PATH = DATA_PATH / "output"
+INPUT_PATH = DATA_PATH / "unprocessed"
+OUTPUT_PATH = DATA_PATH / "processed"
 PLOT_PATH = DATA_PATH / "plots"
 
 

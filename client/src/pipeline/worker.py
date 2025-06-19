@@ -1,36 +1,36 @@
 from pathlib import Path
 from pandas import DataFrame, read_parquet
 
-from .dataset import ExperimentComposition
+from .data.datasets import Loader
+from .data.utils import ExperimentBundle
 from .dataframe import *
 from .process import process_dataframe
 
 
-def process_composition(
-    args: tuple[Path, ExperimentComposition],
-) -> ExperimentComposition:
-    (output_path, composition) = args
+def process_bundle(args: tuple[ExperimentBundle, Path, Loader]) -> ExperimentBundle:
+    (bundle, output, loader) = args
 
-    df = combine_composition(composition)
-    process_dataframe(df)
+    df = load_and_combine_bundle(bundle)
 
-    parquet_path = output_path / composition.experiment.name
-    df.to_parquet(parquet_path)
+    loader.preprocess(df, bundle.primary)
+    process_dataframe(df, loader)
+    loader.postprocess(df, bundle.primary)
 
-    return composition
+    df.to_parquet(output / bundle.primary.path.name)
+    return bundle
 
 
-def combine_composition(composition: ExperimentComposition) -> DataFrame:
-    """Combines the positive and negative DataFrames in a composition."""
+def load_and_combine_bundle(bundle: ExperimentBundle) -> DataFrame:
+    primary = read_parquet(bundle.primary.path)
 
-    experiment = read_parquet(composition.experiment)
+    for p in bundle.positive:
+        df = p.read()
+        primary[Columns.LoadForce] += df[Columns.LoadForce]
+        primary[Columns.LoadMoment] += df[Columns.LoadMoment]
 
-    for p in map(read_parquet, composition.positive):
-        experiment[Columns.LoadForce] += p[Columns.LoadForce]
-        experiment[Columns.LoadMoment] += p[Columns.LoadMoment]
+    for n in bundle.negative:
+        df = n.read()
+        primary[Columns.LoadForce] -= df[Columns.LoadForce]
+        primary[Columns.LoadMoment] -= df[Columns.LoadMoment]
 
-    for n in map(read_parquet, composition.negative):
-        experiment[Columns.LoadForce] -= n[Columns.LoadForce]
-        experiment[Columns.LoadMoment] -= n[Columns.LoadMoment]
-
-    return experiment
+    return primary

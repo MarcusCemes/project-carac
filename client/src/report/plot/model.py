@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 from pipeline.dataframe import Columns
 
+from .common import find_experiment
 from .defs import *
 
 
@@ -15,7 +16,7 @@ class Opts:
     xlabel: str
 
 
-FILE = "decoupled/0013_coupled_axis_r0.0-0.0-2.0_w0.5_s-1.0_t-1.0.parquet"
+FILE = find_experiment("axis-uncoupled", 13)
 
 OPTS: list[Opts] = [
     Opts(
@@ -26,6 +27,10 @@ OPTS: list[Opts] = [
         Columns.AeroAngles[1],
         "Beta β (rad)",
     ),
+    # Opts(
+    #     Columns.Time,
+    #     "Time (s)",
+    # ),
 ]
 
 
@@ -40,14 +45,15 @@ def main():
 
 def plot_model(df: pd.DataFrame):
     for opts in OPTS:
-        plt.figure()
+        fig = plt.figure()
+        ax = fig.gca()
 
-        df.plot(**asdict(opts), y=Columns.AeroForcesModel)
+        df.plot(**asdict(opts), y=Columns.AeroForcesModel, ax=ax)
 
         plt.title(f"Aerodynamic Forces Model ({opts.xlabel})")
         plt.tight_layout()
 
-        path = PLOT_PATH / f"aero_forces_model_{opts.x}.png"
+        path = PLOT_PATH / f"model_{opts.x}.png"
 
         if "--save" in argv:
             plt.savefig(path, dpi=DPI_IMAGE)
@@ -68,7 +74,7 @@ def plot_inputs(df: pd.DataFrame):
 
         ax5 = plt.subplot2grid((3, 2), (2, 0), colspan=2)
 
-        df.plot(**args, y=Columns.WorldPosition, ax=ax1)
+        df.plot(**args, y=Columns.WorldRotation, ax=ax1)
         df.plot(**args, y=Columns.Attitude, ax=ax2)
         df.plot(**args, y=Columns.AeroAngularVelocity, ax=ax3)
         df.plot(**args, y=Columns.AeroVelocity, ax=ax4)

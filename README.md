@@ -1,6 +1,6 @@
 # Project CARAC
 
-**Adaptive Automation Platform for Aerodynamic Drone Characterization**
+**Automation Platform for Aerodynamic Drone Characterization**
 
 A comprehensive automation platform for conducting aerodynamic experiments on morphing drones under controlled windy conditions. This project was developed as part of a Master's thesis at EPFL by Marcus Cemes.
 

@@ -1,15 +1,18 @@
 from pandas import DataFrame
 import numpy as np
 from scipy.linalg import norm
-from scipy.signal import butter, filtfilt
+from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation
 
+from carac.helpers import Vec3
+
 from .config import *
+from .data.datasets import Loader
 from .dataframe import *
 from .utils import *
 
 
-def process_dataframe(df: DataFrame) -> None:
+def process_dataframe(df: DataFrame, loader: Loader) -> None:
     """
     Applies a series of transformations to process/augment data.
     Modifies the DataFrame in-place.
@@ -20,35 +23,23 @@ def process_dataframe(df: DataFrame) -> None:
     3. Computes aerodynamic forces (lift, drag, side_force).
     """
 
-    correct_sweep(df)
-    transform_wrench(df)
-    add_body_frame_kinematics(df)
+    transform_wrench(df, loader.offset)
+    add_body_frame_kinematics(df, loader.wind)
     add_aero_forces(df, Columns.BodyForce, Columns.AeroForces)
 
-    if ANALYTICAL_MODELLING and has_drone_actuation(df):
+    if ANALYTICAL_MODELLING:
         add_analytical_model(df)
         add_aero_forces(df, Columns.BodyForceModel, Columns.BodyMomentModel)
 
 
-def correct_sweep(df: DataFrame) -> None:
-    """
-    Corrects the left wing sweep direction in the DataFrame, which is inverted for
-    readability in the drone relay program.
-    """
-
-    if CORRECT_L_SWEEP and has_drone_actuation(df):
-        drone_left_wing = Columns.DroneActuators[1]
-        df[drone_left_wing] *= -1.0
-
-
-def transform_wrench(df: DataFrame) -> None:
+def transform_wrench(df: DataFrame, offset: Vec3) -> None:
     """
     Transforms load cell moments to the center of mass. Modifies df in-place.
     Formula: M_new = M_old - r x F, where r is from old to new point.
     """
 
     forces = df[Columns.LoadForce].to_numpy()
-    moment_correction = np.cross(np.array(COM_OFFSET_M), forces)
+    moment_correction = np.cross(np.array(offset), forces)
 
     # Rename columns from world frame to drone frame
     col_map = dict(
@@ -64,64 +55,81 @@ def transform_wrench(df: DataFrame) -> None:
     df[Columns.BodyMoment] -= moment_correction
 
 
-def add_body_frame_kinematics(df: DataFrame) -> None:
+def add_body_frame_kinematics(df: DataFrame, wind: WindLut) -> None:
+    """
+    Computes body-frame kinematics using a Savitzky-Golay filter for smooth
+    derivatives of position and orientation.
 
+    This version differentiates the quaternions directly to avoid noise amplification
+    issues associated with Euler angles.
+    """
     df.sort_values(by=Columns.Time, inplace=True)
     df.reset_index(drop=True, inplace=True)
 
     times = df[Columns.Time].to_numpy()
-    fs = 1.0 / np.mean(np.diff(times))
 
-    # --- 1. Low-Pass Filter the Source Euler Angles ---
+    # --- Savitzky-Golay Filter Parameters (tune these as needed) ---
+    SAVGOL_WINDOW = 99
+    SAVGOL_POLYORDER = 3
 
-    # a) Get Euler angles and unwrap them to create a continuous signal
+    # --- 1. Calculate PQR by Differentiating Quaternions ---
+
     euler_angles_rad = df[Columns.WorldRotation].to_numpy()
     unwrapped_euler = np.unwrap(euler_angles_rad, axis=0)
-
-    # b) Design the Butterworth low-pass filter
-    cutoff_hz = 10.0
-    filter_order = 4
-
-    # The butterworth function requires the cutoff frequency to be normalized by the Nyquist frequency (fs / 2)
-    nyquist = 0.5 * fs
-    normal_cutoff = cutoff_hz / nyquist
-
-    if 0 < normal_cutoff < 1:
-        b, a = butter(filter_order, normal_cutoff, btype="low", analog=False)
-
-        # c) Apply the filter using 'filtfilt' for zero phase shift (no time delay)
-        unwrapped_euler = filtfilt(b, a, unwrapped_euler, axis=0)
-
-    # --- 2. Calculate PQR using Quaternion Central Derivative ---
-
-    # a) Create new, clean Rotation objects from the filtered Euler angles
-    # Note: We can use the unwrapped angles directly; `from_euler` handles it correctly.
     rot = Rotation.from_euler(ROT_ANGLE_SEQ, unwrapped_euler)
-
-    # b) Save the filtered quaternion representation
     df[Columns.Attitude] = rot.as_quat()
 
-    # c) Apply the stable central difference method
-    dt_central = times[2:] - times[:-2]
-    delta_r = rot[2:] * rot[:-2].inv()  # World-frame difference
-    rot_vecs_world = delta_r.as_rotvec()
-    angular_velocity_world = rot_vecs_world / dt_central[:, np.newaxis]
-    angular_velocity_body = rot[1:-1].inv().apply(angular_velocity_world)
+    # a) Get quaternion array and ensure continuity
+    quats = rot.as_quat()
+    for i in range(1, len(quats)):
+        # If the dot product is negative, the quaternions are pointing in
+        # "opposite" directions, so we flip the sign of the current one.
+        if np.dot(quats[i - 1], quats[i]) < 0:
+            quats[i] *= -1
 
-    # d) Pad the result to match the original dataframe shape
-    padded_pqr = np.pad(angular_velocity_body, ((1, 1), (0, 0)), "edge")
-    df[Columns.AeroAngularVelocity] = padded_pqr
+    # b) Calculate a stable, average time step
+    dt = np.mean(np.diff(times)).item()
 
-    # --- 3. Calculate UVW and Aero Angles using the SAME filtered data ---
-    # This ensures all derived quantities are consistent.
+    # c) Calculate the time derivative of each quaternion component using SavGol
+    quat_derivatives = savgol_filter(
+        quats,
+        window_length=SAVGOL_WINDOW,
+        polyorder=SAVGOL_POLYORDER,
+        deriv=1,
+        delta=dt,
+        axis=0,
+        mode="interp",
+    )
+
+    # d) Convert quaternion derivatives to body-frame angular velocity (p, q, r)
+    # The formula is omega_body = 2 * H(q)^T * q_dot
+    # where H(q) is a specific matrix and scipy stores q as [x, y, z, w]
+    qx, qy, qz, qw = quats.T
+    qx_dot, qy_dot, qz_dot, qw_dot = quat_derivatives.T
+
+    # This is the explicit formula for the conversion
+    p = 2 * (-qx * qw_dot + qw * qx_dot - qz * qy_dot + qy * qz_dot)
+    q = 2 * (-qy * qw_dot + qz * qx_dot + qw * qy_dot - qx * qz_dot)
+    r = 2 * (-qz * qw_dot - qy * qx_dot + qx * qy_dot + qw * qz_dot)
+
+    angular_velocity_body = np.vstack([p, q, r]).T
+    df[Columns.AeroAngularVelocity] = angular_velocity_body
+
+    # --- 2. Calculate UVW and Aero Angles ---
 
     positions = df[Columns.WorldPosition].to_numpy()
-    vel_drone_world = np.zeros_like(positions)
-    vel_drone_world[1:-1] = (positions[2:] - positions[:-2]) / dt_central[:, np.newaxis]
-    vel_drone_world[0] = (positions[1] - positions[0]) / (times[1] - times[0])
-    vel_drone_world[-1] = (positions[-1] - positions[-2]) / (times[-1] - times[-2])
 
-    wind_speeds = df[Columns.Wind].map(lookup_wind)
+    vel_drone_world = savgol_filter(
+        positions,
+        window_length=SAVGOL_WINDOW,
+        polyorder=SAVGOL_POLYORDER,
+        deriv=1,
+        delta=dt,
+        axis=0,
+        mode="interp",
+    )
+
+    wind_speeds = df[Columns.Wind].map(wind.lookup)
     wind_dir_norm = np.array([-1.0, 0.0, 0.0])
     vel_wind_world = wind_speeds.to_numpy()[:, np.newaxis] * wind_dir_norm
 
@@ -135,6 +143,7 @@ def add_body_frame_kinematics(df: DataFrame) -> None:
     epsilon = 1e-9
     alpha = np.arctan2(-w, u)
     beta = np.arcsin(v / (total_airspeed + epsilon))
+
     df[Columns.AeroAngles] = np.vstack([alpha, beta]).T
 
 
@@ -145,18 +154,17 @@ def add_aero_forces(
 ) -> None:
     """Computes lift, drag, and side force from body-frame forces and aero angles."""
 
-    forces_body = df[force_cols].to_numpy()
     alpha, beta = df[Columns.AeroAngles].to_numpy().T
+    body_to_wind_rotation = Rotation.from_euler("zy", np.vstack([beta, alpha]).T)
 
-    rotation = Rotation.from_euler(
-        "XYZ", -np.array([np.zeros_like(alpha), alpha, beta]).T
-    )
-    aero_forces = rotation.apply(forces_body)
+    forces_body = df[force_cols].to_numpy()
+    forces_wind_frame = body_to_wind_rotation.inv().apply(forces_body)
 
-    # Give a positive drag profile
-    aero_forces[:, 0] = -aero_forces[:, 0]
+    drag = -forces_wind_frame[:, 0]
+    side_force = forces_wind_frame[:, 1]
+    lift = -forces_wind_frame[:, 2]
 
-    df[output_cols] = aero_forces
+    df[output_cols] = np.vstack([drag, side_force, lift]).T
 
 
 def add_analytical_model(df: DataFrame) -> None:
@@ -194,12 +202,3 @@ def add_analytical_model(df: DataFrame) -> None:
     df[Columns.BodyMomentModel] = moments_list
 
     add_aero_forces(df, Columns.BodyForceModel, Columns.AeroForcesModel)
-
-
-def has_drone_actuation(df: DataFrame) -> bool:
-    """Checks if the DataFrame contains drone actuator data."""
-
-    return (
-        all(col in df.columns for col in Columns.DroneActuators)
-        and not df[Columns.DroneActuators].isnull().all().all()
-    )

@@ -14,7 +14,7 @@ INPUT_1 = INPUT_PATH / "0001_high-samples.parquet"
 INPUT_2 = INPUT_PATH / "0002_high-samples.parquet"
 
 COL_X = "time"
-COL_Y = "load/fx"
+COL_Y = "fx"
 
 OUTPUT_PATH = PLOT_PATH / "shift"
 
@@ -164,10 +164,10 @@ def plot_results(df1: pd.DataFrame, df2: pd.DataFrame, calculated_shift: float):
         idx2 = (df2[COL_X] >= 330) & (df2[COL_X] <= 331)
 
         df1[idx1].plot.line(
-            x=COL_X, y=COL_Y, ax=ax, marker="o", markersize=2, c="#ff6361"
+            x=COL_X, y=COL_Y, ax=ax, marker="o", markersize=2, c="#ee6677"
         )
         df2[idx2].plot.line(
-            x=COL_X, y=COL_Y, ax=ax, marker="o", markersize=2, c="#003f5c"
+            x=COL_X, y=COL_Y, ax=ax, marker="o", markersize=2, c="#4477aa"
         )
 
         ax.legend().remove()
@@ -175,7 +175,7 @@ def plot_results(df1: pd.DataFrame, df2: pd.DataFrame, calculated_shift: float):
 
         plt.close(fig)
 
-    plt.show()
+    # plt.show()
 
 
 if __name__ == "__main__":

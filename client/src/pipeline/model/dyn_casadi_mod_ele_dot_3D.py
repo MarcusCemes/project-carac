@@ -1,5 +1,6 @@
 import casadi as ca
 import numpy as np
+from numpy.typing import NDArray
 import spatial_casadi as sc
 
 
@@ -555,7 +556,13 @@ class IndoorUAV3D:
         return [omega_mot_norm_dot, x_sw_sym_dot[0], x_sw_sym_dot[1], x_ele_dot]
 
     def force_moment_cg_total(
-        self, x, u, theta_sw_l=None, theta_sw_r=None, ele_rad=None, rud_rad=None
+        self,
+        x: NDArray,
+        u: NDArray,
+        theta_sw_l=None,
+        theta_sw_r=None,
+        ele_rad=None,
+        rud_rad=None,
     ):
         # State vector x ordered as: [pos_x, pos_y, pos_z, vel_u, vel_v, vel_w, q_x, q_y, q_z, q_w, ome_p, ome_q, ome_r, omega_mot_norm, x_sw_sym_l_0, x_sw_sym_l_1, x_sw_sym_r_0, x_sw_sym_r_1, x_ele, x_rud]
         # Control vector u ordered as: [u_thr, u_sw_l, u_sw_r, u_ele_dot, u_rud_dot]
