@@ -13,6 +13,7 @@ chunked-bytes = "0.3"
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
 crossterm = { version = "0.29", features = ["event-stream"] }
+csv = "1.3"
 eyre = "0.6"
 futures = "0.3.31"
 indicatif = "0.17.11"
@@ -35,10 +36,9 @@ version = "0.8"
 default-features = false
 features = ["http1", "json", "tokio"]
 
-[dependencies.polars]
-version = "0.48"
+[dependencies.parquet]
+version = "55.1"
 default-features = false
-features = ["csv", "parquet"]
 
 [dependencies.rodio]
 version = "0.20"

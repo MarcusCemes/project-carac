@@ -1,14 +1,12 @@
 use std::{
     fs::read,
-    iter,
     path::Path,
     slice::{ChunksExact, Iter},
 };
 
 use bytes::{Buf, BufMut, TryGetError};
 use chunked_bytes::ChunkedBytes;
-use eyre::{Context, ContextCompat, Result, eyre};
-use polars::prelude::*;
+use eyre::{Context, Result, eyre};
 
 use crate::{
     data::sink::StreamInfo,
@@ -203,11 +201,8 @@ impl Run {
         self.recorded_streams.iter().map(|s| s.n_channels).sum()
     }
 
-    pub fn dataframe(&self, streams: &[StreamInfo], divisions: u32) -> Result<DataFrame> {
+    pub fn segment(&self, divisions: u32) -> SegmentedRun {
         SegmentedRun::new(SegmentationMethod::Count(divisions))
-            .columns(self)
-            .wrap_err("Segmentation failed")?
-            .dataframe(streams)
     }
 
     pub fn decode<B: Buf>(buf: &mut B, channels: &[u8]) -> Result<Run> {
@@ -269,26 +264,6 @@ impl RecordedStream {
             timestamps,
             n_channels,
         }
-    }
-
-    pub fn dataframe(&self, info: &StreamInfo) -> Result<DataFrame> {
-        let time = self.time_column();
-        let channels = self.columns();
-
-        let time_column = ChunkedArray::<Float32Type>::from_vec("time".into(), time).into_column();
-
-        let channel_columns =
-            channels
-                .into_iter()
-                .zip(info.channels.iter().cloned())
-                .map(|(iter, name)| {
-                    ChunkedArray::<Float32Type>::from_vec(name.into(), iter.into_vec())
-                        .into_column()
-                });
-
-        let columns = iter::once(time_column).chain(channel_columns).collect();
-
-        Ok(DataFrame::new(columns)?)
     }
 
     pub fn time_column(&self) -> Vec<f32> {

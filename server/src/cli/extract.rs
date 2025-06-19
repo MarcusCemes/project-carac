@@ -6,7 +6,6 @@ use std::{
 
 use clap::Parser;
 use eyre::{ContextCompat, Result, eyre};
-use polars::prelude::*;
 
 use crate::{
     cli::common::OutputFormat,
@@ -67,31 +66,33 @@ pub fn extract(opts: ExtractOpts) -> Result<()> {
         let _ = filter.apply(stream);
     }
 
-    let mut df = stream.dataframe(stream_info)?;
-    let mut output = get_output(opts.clone())?;
+    unimplemented!();
 
-    if let Some(channel) = opts.channel {
-        df = df.select(["time", &channel])?;
-    }
+    // let mut df = stream.dataframe(stream_info)?;
+    // let mut output = get_output(opts.clone())?;
 
-    if let Some(skip) = opts.skip {
-        let indices: Vec<_> = (0..df.height() as u32).step_by(skip as usize).collect();
-        let idx = IdxCa::new("idx".into(), &indices);
+    // if let Some(channel) = opts.channel {
+    //     df = df.select(["time", &channel])?;
+    // }
 
-        df = df.take(&idx)?;
-    }
+    // if let Some(skip) = opts.skip {
+    //     let indices: Vec<_> = (0..df.height() as u32).step_by(skip as usize).collect();
+    //     let idx = IdxCa::new("idx".into(), &indices);
 
-    match opts.format {
-        OutputFormat::Csv => {
-            CsvWriter::new(&mut output).finish(&mut df)?;
-        }
+    //     df = df.take(&idx)?;
+    // }
 
-        OutputFormat::Parquet => {
-            ParquetWriter::new(&mut output).finish(&mut df)?;
-        }
-    }
+    // match opts.format {
+    //     OutputFormat::Csv => {
+    //         CsvWriter::new(&mut output).finish(&mut df)?;
+    //     }
 
-    Ok(())
+    //     OutputFormat::Parquet => {
+    //         ParquetWriter::new(&mut output).finish(&mut df)?;
+    //     }
+    // }
+
+    // Ok(())
 }
 
 fn get_output(opts: ExtractOpts) -> Result<Box<dyn Write>> {

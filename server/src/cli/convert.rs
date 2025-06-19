@@ -6,7 +6,6 @@ use std::{
 
 use clap::Parser;
 use eyre::{ContextCompat, Result, eyre};
-use polars::prelude::*;
 
 use crate::{
     cli::common::OutputFormat,
@@ -57,23 +56,23 @@ pub fn segment(opts: ConvertOpts) -> Result<()> {
         }
     }
 
-    let mut df = run.dataframe(&metadata.streams, opts.divisions)?;
+    let segmentation = run.segment(opts.divisions);
     let mut output = get_output(opts.clone())?;
 
     match opts.format {
         OutputFormat::Csv => {
-            CsvWriter::new(&mut output).finish(&mut df)?;
+            segmentation.write_csv(&mut output, &run, &metadata.streams)?;
         }
 
         OutputFormat::Parquet => {
-            ParquetWriter::new(&mut output).finish(&mut df)?;
+            segmentation.write_parquet(&mut output, &run, &metadata.streams)?;
         }
     }
 
     Ok(())
 }
 
-fn get_output(opts: ConvertOpts) -> Result<Box<dyn Write>> {
+fn get_output(opts: ConvertOpts) -> Result<Box<dyn Write + Send>> {
     Ok(match opts.output {
         Some(path) => Box::new(File::create(path)?),
         None => Box::new(io::stdout()),

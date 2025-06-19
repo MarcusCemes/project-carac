@@ -7,7 +7,6 @@ use std::{
 use clap::Parser;
 use eyre::{Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
-use polars::prelude::*;
 use rayon::prelude::*;
 
 use crate::{
@@ -119,16 +118,16 @@ fn process_and_save_run(
         }
     }
 
-    let mut df = run.dataframe(streams, opts.divisions)?;
-
-    // Create the output file and write the DataFrame in the specified format
+    let segmentation = run.segment(opts.divisions);
     let mut file = std::fs::File::create(output_path)?;
+
     match opts.format {
         OutputFormat::Csv => {
-            CsvWriter::new(&mut file).finish(&mut df)?;
+            segmentation.write_csv(&mut file, &run, streams)?;
         }
+
         OutputFormat::Parquet => {
-            ParquetWriter::new(&mut file).finish(&mut df)?;
+            segmentation.write_parquet(&mut file, &run, streams)?;
         }
     }
 

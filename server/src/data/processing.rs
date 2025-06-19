@@ -1,9 +1,19 @@
-use std::iter::{self, Peekable};
+use std::{
+    io::Write,
+    iter::{self, Peekable},
+    sync::Arc,
+};
 
 use butterworth::{Cutoff, Filter};
-use eyre::{ContextCompat, Result};
+use eyre::{ContextCompat, Result, eyre};
 use nalgebra::{Rotation3, Vector3};
-use polars::prelude::*;
+use parquet::{
+    basic::{Repetition, Type as PhysicalType},
+    data_type::FloatType,
+    errors::ParquetError,
+    file::{properties::WriterProperties, writer::SerializedFileWriter},
+    schema::types::Type,
+};
 
 use crate::defs::{Load, Point};
 
@@ -42,16 +52,88 @@ impl SegmentedRun {
         Self { method }
     }
 
-    pub fn rows<'a>(&self, run: &'a Run) -> Option<(SegmentedRunRows<'a>, Box<[f32]>)> {
+    pub fn write_csv<W: Write>(&self, buf: W, run: &Run, streams: &[StreamInfo]) -> Result<()> {
+        let (mut rows, mut values) = self.rows(run)?;
+
+        let mut w = csv::Writer::from_writer(buf);
+
+        w.write_record(column_names(streams))?;
+
+        while let Some(time) = rows.next(&mut values) {
+            w.write_field(format!("{time}"))?;
+
+            for value in &values {
+                w.write_field(format!("{value}"))?;
+            }
+
+            w.write_record(None::<&[u8]>)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_parquet<W: Write + Send>(
+        &self,
+        buf: W,
+        run: &Run,
+        streams: &[StreamInfo],
+    ) -> Result<()> {
+        let columns = self.columns(run)?;
+        let schema = Self::parquet_schema(streams)?;
+
+        let props = Arc::new(WriterProperties::builder().build());
+
+        let mut writer = SerializedFileWriter::new(buf, schema, props)?;
+        let mut row_group_writer = writer.next_row_group()?;
+
+        let column_data = iter::once(&columns.time).chain(&columns.streams);
+
+        for column in column_data {
+            let mut col_writer = row_group_writer.next_column()?.unwrap();
+
+            col_writer
+                .typed::<FloatType>()
+                .write_batch(column, None, None)?;
+
+            col_writer.close()?;
+        }
+
+        row_group_writer.close()?;
+        writer.close()?;
+
+        Ok(())
+    }
+
+    fn parquet_schema(streams: &[StreamInfo]) -> Result<Arc<Type>> {
+        let column_names = iter::once("time".to_owned())
+            .chain(streams.iter().flat_map(StreamInfo::qualified_channel_names));
+
+        let fields = column_names
+            .map(|name| {
+                Type::primitive_type_builder(&name, PhysicalType::FLOAT)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .map(Arc::new)
+            })
+            .collect::<Result<Vec<_>, ParquetError>>()?;
+
+        let schema = Type::group_type_builder("schema")
+            .with_fields(fields)
+            .build()?;
+
+        Ok(Arc::new(schema))
+    }
+
+    fn rows<'a>(&self, run: &'a Run) -> Result<(SegmentedRunRows<'a>, Box<[f32]>)> {
         let time = self.time_iterator(run)?;
 
         let n_channels = run.total_channels();
         let buffer = vec![0.0; n_channels].into_boxed_slice();
 
-        Some((SegmentedRunRows::new(run, time), buffer))
+        Ok((SegmentedRunRows::new(run, time), buffer))
     }
 
-    pub fn columns(&self, run: &Run) -> Option<SegmentedRunColumns> {
+    fn columns(&self, run: &Run) -> Result<SegmentedRunColumns> {
         let (mut rows, mut buffer) = self.rows(run)?;
 
         let n_samples = rows.time.total;
@@ -72,11 +154,12 @@ impl SegmentedRun {
             }
         }
 
-        Some(SegmentedRunColumns { time, streams })
+        Ok(SegmentedRunColumns { time, streams })
     }
 
-    fn time_iterator(&self, run: &Run) -> Option<TimeIterator> {
-        let run_duration = f32::from(run.duration()?);
+    fn time_iterator(&self, run: &Run) -> Result<TimeIterator> {
+        let run_duration = run.duration().ok_or(eyre!("Run has no duration"))?;
+        let run_duration = f32::from(run_duration);
 
         let (duration, count) = match self.method {
             SegmentationMethod::Count(count) => (run_duration, count),
@@ -88,7 +171,7 @@ impl SegmentedRun {
             }
         };
 
-        Some(TimeIterator::new(duration, count))
+        Ok(TimeIterator::new(duration, count))
     }
 }
 
@@ -145,42 +228,43 @@ impl StreamInterpolator<'_> {
     }
 
     fn next(&mut self, time: f32, data: &mut [f32]) -> bool {
-        // Get a mutable reference to the cursor and compute its timestamp
         let Some(cursor) = self.cursor.as_mut() else {
             return false;
         };
 
-        let cursor_time = f32::from(cursor.time);
-
-        // Keep advancing the cursor until we find the closest pre-time sample
         while let Some(next_sample) = self.iter_samples.peek() {
             if f32::from(next_sample.time) > time {
                 break;
             }
 
+            // SAFETY: We just peeked the next sample, so it exists.
             *cursor = unsafe { self.iter_samples.next().unwrap_unchecked() };
         }
 
-        // Peek at the next sample, or return the current sample if we exhausted the iterator
+        // Now that the cursor is in the correct position, read its time
+        let cursor_time = f32::from(cursor.time);
+
         let Some(next_cursor) = self.iter_samples.peek() else {
             data.copy_from_slice(cursor.channel_data);
             return true;
         };
 
-        // Interpolate between the two samples, clamping the time value (no extrapolation)
+        // Interpolate between the two samples
         let lt = cursor_time;
         let rt = f32::from(next_cursor.time);
-        let t = (time - lt) / (rt - lt);
 
-        if t.is_nan() {
+        // Handle cases where samples have the same timestamp to avoid division by zero
+        if lt == rt {
             data.copy_from_slice(cursor.channel_data);
             return true;
         }
 
+        let t = (time - lt) / (rt - lt);
+
         // Don't extrapolate beyond the first or last sample
         let t = t.clamp(0., 1.);
 
-        // Compute the channel interpolation and return buffer
+        // Compute the channel interpolation and fill the output buffer
         let l = cursor.channel_data.iter();
         let r = next_cursor.channel_data.iter();
         let o = data.iter_mut();
@@ -193,23 +277,10 @@ impl StreamInterpolator<'_> {
     }
 }
 
-impl SegmentedRunColumns {
-    pub fn dataframe(self, streams: &[StreamInfo]) -> Result<DataFrame> {
-        let time_column =
-            ChunkedArray::<Float32Type>::from_vec("time".into(), self.time).into_column();
-
-        let channel_columns = self
-            .streams
-            .into_iter()
-            .zip(streams.iter().flat_map(|s| s.qualified_channel_names()))
-            .map(|(iter, name)| {
-                ChunkedArray::<Float32Type>::from_vec(name.into(), iter).into_column()
-            });
-
-        let columns = iter::once(time_column).chain(channel_columns).collect();
-
-        Ok(DataFrame::new(columns)?)
-    }
+pub fn column_names(streams: &[StreamInfo]) -> Vec<String> {
+    iter::once("time".to_owned())
+        .chain(streams.iter().flat_map(|s| s.qualified_channel_names()))
+        .collect()
 }
 
 /* == TimeIterator == */
