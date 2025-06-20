@@ -24,7 +24,8 @@ from .utils import (
 
 STANDARD_OFFSET: Vec3 = (-1.12684e-02, -1.05960e-03, 1.85208e-01)
 LUT_46 = {0.46: 5.0}
-LUT_50 = {0.3: 4.1, 0.5: 5.8}
+LUT_30_50 = {0.3: 4.1, 0.5: 5.8}
+LUT_48_50 = {0.49: 5.7, 0.5: 5.8}
 
 
 # == Base class == #
@@ -101,7 +102,7 @@ class PlungeLoader(Loader):
 
 class UncoupledAxisLoader(Loader):
     def __init__(self):
-        super().__init__(name="axis-uncoupled", wind=WindLut(LUT_50))
+        super().__init__(name="axis-uncoupled", wind=WindLut(LUT_30_50))
         self.path = INPUT_PATH / self.name
 
     def load_bundles(self) -> list[ExperimentBundle]:
@@ -131,7 +132,7 @@ class UncoupledAxisLoader(Loader):
 
 class CoupledAxisLoader(Loader):
     def __init__(self):
-        super().__init__(name="axis-coupled", wind=WindLut(LUT_50))
+        super().__init__(name="axis-coupled", wind=WindLut(LUT_30_50))
         self.path = INPUT_PATH / self.name
 
     def load_bundles(self) -> list[ExperimentBundle]:
@@ -158,7 +159,7 @@ class CoupledAxisLoader(Loader):
 
 class FreeFlightLoader(Loader):
     def __init__(self):
-        super().__init__(name="free-flight", wind=WindLut(LUT_50))
+        super().__init__(name="free-flight", wind=WindLut(LUT_30_50))
         self.path = INPUT_PATH / self.name
 
     def load_bundles(self) -> list[ExperimentBundle]:
@@ -196,13 +197,14 @@ class FreeFlightLoader(Loader):
         )
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        del experiment
         remap_sweep(df)
         remap_throttle(df)
 
 
 class FreeFlightExtendedLoader(Loader):
     def __init__(self):
-        super().__init__(name="free-flight-extended", wind=WindLut(LUT_50))
+        super().__init__(name="free-flight-extended", wind=WindLut(LUT_30_50))
         self.path = INPUT_PATH / self.name
 
     def load_bundles(self) -> list[ExperimentBundle]:
@@ -216,6 +218,38 @@ class FreeFlightExtendedLoader(Loader):
         )
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        del experiment
+        remap_sweep(df)
+        remap_throttle(df)
+
+
+class FreeFlight2Loader(Loader):
+    def __init__(self):
+        super().__init__(name="free-flight-2", wind=WindLut(LUT_48_50))
+        self.path = INPUT_PATH / self.name
+
+    def load_bundles(self) -> list[ExperimentBundle]:
+        loaded = self.read_experiments(self.path / "loaded")
+        unloaded = self.read_experiments(self.path / "unloaded")
+
+        loaded_calibrated = combine_strided_bundles(loaded[0:4], 2)
+        unloaded_calibrated = combine_strided_bundles(unloaded, 1)
+
+        validation_loaded_calibrated = combine_strided_bundles(loaded[4:6], 1)
+
+        assert len(loaded_calibrated) == 2
+        assert len(validation_loaded_calibrated) == 1
+        assert len(unloaded_calibrated) == 1
+
+        return [
+            *combine_calibrated_bundles(
+                positive_bundles=[*loaded_calibrated, *validation_loaded_calibrated],
+                negative_bundles=unloaded_calibrated,
+            ),
+        ]
+
+    def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        del experiment
         remap_sweep(df)
         remap_throttle(df)
 
@@ -226,4 +260,5 @@ LOADERS: list[Loader] = [
     CoupledAxisLoader(),
     FreeFlightLoader(),
     FreeFlightExtendedLoader(),
+    FreeFlight2Loader(),
 ]

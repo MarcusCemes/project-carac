@@ -6,6 +6,18 @@ Vec3 = tuple[float, float, float]
 Vec4 = tuple[float, float, float, float]
 
 
+def format_name(name: str, params: dict[str, float]) -> str:
+    name = name.replace("_", "-")
+
+    for key, value in params.items():
+        if value.is_integer():
+            name += f"_{key}{int(value)}"
+        else:
+            name += f"_{key}{value}"
+
+    return name
+
+
 def deg_to_rad(deg: float) -> float:
     return deg * (3.141592653589793 / 180.0)
 

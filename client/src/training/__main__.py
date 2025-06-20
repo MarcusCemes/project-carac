@@ -1,19 +1,11 @@
-from time import time
-
-from .dataset import FreeFlightDataset
+from .datasets import FreeFlight2Dataset
 from .defs import *
-from .train import train
+from .train import train_and_save_models
 
 
 def main():
-    files = [*INPUT_DIR.glob("*.parquet")]
-
-    dataset = FreeFlightDataset(files)
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / f"{int(time())}_weights.pth"
-
-    train(dataset, output_path)
+    dataset = FreeFlight2Dataset()
+    train_and_save_models(dataset)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ class Configs(EnumDict):
 
 class Offsets(EnumDict):
     LoadCell = Point(x=LOAD_CELL_DISTANCE_X)
-    Drone = Point(x=LOAD_CELL_DISTANCE_X, z=DRONE_DISTANCE_Z)
+    Drone = Point(x=LOAD_CELL_DISTANCE_X, y=-20, z=DRONE_DISTANCE_Z)
 
 
 class Points(EnumDict):

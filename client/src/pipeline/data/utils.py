@@ -4,10 +4,7 @@ from pathlib import Path
 from re import compile as re_compile
 from typing import Sequence, TypeVar
 
-import numpy as np
 from pandas import DataFrame, read_parquet
-
-from pipeline.dataframe import Columns
 
 
 T = TypeVar("T")

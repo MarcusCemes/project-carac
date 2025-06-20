@@ -1,4 +1,4 @@
-EPSILON = 1e-6
+EPSILON = 1e-2
 
 
 class WindLut:

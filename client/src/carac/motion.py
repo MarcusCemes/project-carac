@@ -3,7 +3,7 @@ import math
 
 import noise
 
-from orchestrator.helpers import Point
+from carac.helpers import Point
 
 
 @dataclass

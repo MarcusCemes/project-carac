@@ -1,21 +1,11 @@
 from asyncio import run
-from enum import EnumDict
-from itertools import product
 from math import cos, sin
 
-from rich.console import Console
-from rich.progress import Progress
 from rich.status import Status
 
-from carac.defs import DRONE_DISTANCE_Z, DRONE_NO_ACTUATION
+from carac.defs import DRONE_DISTANCE_Z
 from carac.helpers import (
-    Vec3,
-    Vec4,
     deg_to_rad,
-    euler_xyz_intrinsic_to_quat,
-    quat_conjugate,
-    quat_multiply,
-    quat_to_angle_rad,
     rad_to_deg,
 )
 from carac.prelude import *
@@ -32,6 +22,7 @@ SWEEP_ANGLE: float = 200
 ROBOT_INTERVAL: float = 0.01
 
 POINT = Points.Working.add(Point(x=-200))
+Y_OFFSET = -20
 
 
 async def main():
@@ -139,25 +130,13 @@ async def run_experiment(
             [
                 *instructions_to,
                 Robot(WaitSettled()),
-            ]
-        )
-
-        print("Complete.")
-        await o.execute(
-            [
+                *([Wind(SetFanSpeed())] if wind_speed > 0 else []),
                 Robot(SetProfile(Profiles.Fast)),
                 Robot(Move(MotionLinear(through_pose))),
             ]
         )
 
-    if wind_speed > 0:
-        print("Turning off wind...")
-        await o.execute(
-            [
-                Wind(SetFanSpeed()),
-                Sleep(10),
-            ]
-        )
+        print("Complete.")
 
     await o.save_experiment()
 
@@ -173,14 +152,14 @@ def point_rotation(
     a = offset * sin(alpha)
     b = offset * cos(alpha)
 
-    f = Robot(Move(MotionLinear(point.add(Point(y=b, z=a, rx=half_angle)))))
+    f = Robot(Move(MotionLinear(point.add(Point(y=Y_OFFSET + b, z=a, rx=half_angle)))))
 
     t = [
         Robot(
             Move(
                 MotionCircular(
-                    point.add(Point(z=-offset)),
-                    point.add(Point(y=-b, z=a, rx=-half_angle)),
+                    point.add(Point(y=Y_OFFSET, z=-offset)),
+                    point.add(Point(y=Y_OFFSET - b, z=a, rx=-half_angle)),
                 )
             )
         )

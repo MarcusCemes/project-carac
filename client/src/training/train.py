@@ -1,94 +1,225 @@
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum, IntEnum
 from pathlib import Path
-from typing import TypeVar
 
-from rich.progress import Progress
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Subset, random_split
+from matplotlib import pyplot as plt
+from rich import print
+from rich.progress import track
+from rich.status import Status
+from torch import cuda, device as get_device, no_grad, save, tensor
+from torch.optim import Adam
+from torch.nn import MSELoss
+from torch.utils.data import DataLoader, Subset
 
-
-from .dataset import FreeFlightDataset
+from .datasets import Batch, SequentialFlightDataset
 from .defs import *
-from .network import SimpleFeedForwardNN
+from .networks.mlp import MLP
+from .networks.lstm import LSTMNet
 
-T = TypeVar("T")
-
-
-INPUT_SIZE = len(INPUT_COLUMNS)
-OUTPUT_SIZE = len(OUTPUT_COLUMNS)
+INPUT_FEATURES = len(INPUT_COLUMNS)
+OUTPUT_FEATURES = len(OUTPUT_COLUMNS)
 
 
-def train(dataset: FreeFlightDataset, save_path: Path):
-    train_loader, val_loader = map(create_loader, split_dataset(dataset))
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class ModelType(Enum):
+    Wrench = 0
+    Residual = 1
 
-    model = SimpleFeedForwardNN(
-        input_size=INPUT_SIZE,
-        output_size=OUTPUT_SIZE,
-        hidden_layers=HIDDEN_LAYERS,
+
+@dataclass
+class ModelContext:
+    name: str
+    model: MLP | LSTMNet
+    optimiser: Adam
+    type: ModelType
+
+    loss_history: list[float] = field(default_factory=list)
+    val_loss_history: list[float] = field(default_factory=list)
+
+    loss_history_tmp: list[float] = field(default_factory=list)
+    val_loss_history_tmp: list[float] = field(default_factory=list)
+
+
+def train_and_save_models(dataset: SequentialFlightDataset) -> Path:
+    """
+    Trains four model variants in parallel on the same data stream and saves the results.
+
+    The four variants are:
+    1. MLP on direct wrench values
+    2. MLP on residuals (experimental - analytical)
+    3. LSTM on direct wrench values
+    4. LSTM on residuals (experimental - analytical)
+    """
+
+    device = get_device("cuda" if cuda.is_available() else "cpu")
+    print(f"Using device: [b]{device}[/]")
+
+    contexts = init_models()
+
+    for ctx in contexts:
+        ctx.model.to(device)
+        print(f"\n[b]Model [cyan]{ctx.name}[/]\n{ctx.model}", end="\n\n")
+
+    batch: Batch
+    criterion = MSELoss()
+    train_loader, val_loader = create_dataloaders(dataset)
+
+    for epoch in track(
+        range(EPOCHS),
+        "Executing training loop",
+        transient=True,
+        total=EPOCHS,
+    ):
+        for batch in train_loader:
+
+            batch_device = map(lambda x: x.to(device), batch)
+            (batch_sequences, batch_wrench, batch_residual) = batch_device
+
+            inputs_mlp = batch_sequences[:, -1, :]  # Use the last time step for MLP
+            inputs_lstm = batch_sequences  # Use the full sequence for LSTM
+
+            for ctx in contexts:
+                ctx.model.train()
+                ctx.optimiser.zero_grad()
+
+                input = inputs_mlp if isinstance(ctx.model, MLP) else inputs_lstm
+
+                target = (
+                    batch_wrench if ctx.type == ModelType.Wrench else batch_residual
+                )
+
+                prediction = ctx.model(input)
+                loss = criterion(prediction, target)
+
+                loss.backward()
+                ctx.optimiser.step()
+
+                ctx.loss_history_tmp.append(loss.item())
+
+        with no_grad():
+            for batch in val_loader:
+                batch_device = map(lambda x: x.to(device), batch)
+                (batch_sequences, batch_wrench, batch_residual) = batch_device
+
+                inputs_mlp = batch_sequences[:, -1, :]
+                inputs_lstm = batch_sequences
+
+                for ctx in contexts:
+                    ctx.model.eval()
+
+                    input = inputs_mlp if isinstance(ctx.model, MLP) else inputs_lstm
+
+                    target = (
+                        batch_wrench if ctx.type == ModelType.Wrench else batch_residual
+                    )
+
+                    prediction = ctx.model(input)
+
+                    val_loss = criterion(prediction, target)
+                    ctx.val_loss_history_tmp.append(val_loss.item())
+
+        line = f"E{epoch+1}"
+
+        for ctx in contexts:
+            train_avg = tensor(ctx.loss_history_tmp).mean().item()
+            val_avg = tensor(ctx.val_loss_history_tmp).mean().item()
+
+            ctx.loss_history.append(train_avg)
+            ctx.val_loss_history.append(val_avg)
+
+            line += f" | {train_avg:.4f} ({val_avg:.4f})"
+
+        print(line)
+
+    print("[green bold]Training complete![/green bold]")
+
+    return save_result(OUTPUT_DIR, contexts)
+
+
+def create_dataloaders(
+    dataset: SequentialFlightDataset,
+) -> tuple[DataLoader, DataLoader]:
+    """Creates a training a validation data loader using a chronological split."""
+
+    dataset_size = len(dataset)
+    split_idx = int(dataset_size * (1 - VAL_SPLIT))
+
+    train_indices = list(range(split_idx))
+    val_indices = list(range(split_idx, dataset_size))
+
+    train_dataset = Subset(dataset, train_indices)
+    val_dataset = Subset(dataset, val_indices)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+    return train_loader, val_loader
+
+
+def save_result(output_dir: Path, contexts: list[ModelContext]) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    model_dir = output_dir / str(timestamp)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    with Status("Saving results"):
+        for ctx in contexts:
+            save_path = model_dir / f"{ctx.name}.pth"
+
+            save(ctx.model.state_dict(), save_path)
+
+            with open(model_dir / save_path.with_suffix(".txt"), "w") as f:
+                f.write(str(ctx.model))
+
+        save_plots(model_dir, contexts)
+
+    return model_dir
+
+
+def save_plots(output_dir: Path, contexts: list[ModelContext]) -> None:
+    plt.figure(figsize=FIG_SIZE)
+
+    for ctx in contexts:
+        plt.plot(ctx.loss_history, label=ctx.name, alpha=0.8)
+
+    plt.title("Training Loss Comparison")
+    plt.xlabel("Training Steps")
+    plt.ylabel("MSE Loss (Log Scale)")
+    plt.legend()
+    plt.grid(True, which="both", ls="--")
+    plt.yscale("log")
+
+    plt.savefig(output_dir / "loss_comparison.png")
+
+    plt.close()
+
+
+def init_models() -> list[ModelContext]:
+    return [
+        init_mlp("mlp-w", ModelType.Wrench),
+        init_mlp("mlp-r", ModelType.Residual),
+        init_lstm("lstm-w", ModelType.Wrench),
+        init_lstm("lstm-r", ModelType.Residual),
+    ]
+
+
+def init_mlp(name: str, type: ModelType) -> ModelContext:
+    model = MLP(INPUT_FEATURES, OUTPUT_FEATURES, MLP_HIDDEN_LAYERS)
+
+    return ModelContext(
+        name=name,
+        model=model,
+        optimiser=Adam(model.parameters(), lr=LEARNING_RATE),
+        type=type,
     )
 
-    model.to(device)
 
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+def init_lstm(name: str, type: ModelType) -> ModelContext:
+    model = LSTMNet(INPUT_FEATURES, LSTM_HIDDEN_SIZE, LSTM_NUM_LAYERS, OUTPUT_FEATURES)
 
-    with Progress(transient=True) as progress:
-        task = progress.add_task("Training", total=EPOCHS)
-
-        for epoch in range(EPOCHS):
-
-            model.train()
-            train_loss = 0.0
-
-            for inputs, targets in train_loader:
-                inputs = inputs.to(device)
-                targets = targets.to(device)
-
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                train_loss += loss.item() * inputs.size(0)
-
-            model.eval()
-            val_loss = 0.0
-
-            with torch.no_grad():
-                for inputs, targets in val_loader:
-                    inputs = inputs.to(device)
-                    targets = targets.to(device)
-
-                    outputs = model(inputs)
-                    loss = criterion(outputs, targets)
-
-                    val_loss += loss.item() * inputs.size(0)
-
-            train_loss /= len(train_loader.dataset)  # type: ignore
-            val_loss /= len(val_loader.dataset)  # type: ignore
-
-            progress.update(task, advance=1)
-            progress.console.log(
-                f"Epoch {epoch+1}/{EPOCHS} \t Training Loss: {train_loss:.6f} \t Validation Loss: {val_loss:.6f}"
-            )
-
-    print("Saving model to", save_path)
-    torch.save(model.state_dict(), save_path)
-
-    with open(save_path.with_suffix(".txt"), "w") as f:
-        f.write(str(model))
-
-
-def split_dataset(dataset: FreeFlightDataset, val_split: float = VAL_SPLIT):
-    val_size = int(len(dataset) * val_split)
-    train_size = len(dataset) - val_size
-
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    return train_dataset, val_dataset
-
-
-def create_loader(dataset: Subset[T], batch_size: int = BATCH_SIZE) -> DataLoader[T]:
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    return ModelContext(
+        name=name,
+        model=model,
+        optimiser=Adam(model.parameters(), lr=LEARNING_RATE),
+        type=type,
+    )

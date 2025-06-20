@@ -15,7 +15,7 @@ class ExperimentStatus(Enum):
 
 
 class ExperimentTui:
-    def __init__(self):
+    def __init__(self, disable: bool = False):
         self.console = Console()
         self.title = ""
         self.current_progress = 0
@@ -23,16 +23,20 @@ class ExperimentTui:
         self.status = ExperimentStatus.IDLE
         self.message = ""
         self._live = None
+        self.disable = disable
 
     def __enter__(self):
         # Create the layout and start Live with screen=True for alternate buffer
         layout = self._make_layout()
         self._live = Live(layout, refresh_per_second=4, screen=True)
-        self._live.__enter__()
+
+        if not self.disable:
+            self._live.__enter__()
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._live:
+        if self._live and not self.disable:
             self._live.__exit__(exc_type, exc_val, exc_tb)
 
     def _make_layout(self) -> Layout:

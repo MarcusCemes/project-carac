@@ -8,6 +8,7 @@ DATA_PATH = (Path(__file__).parent / "../../../../data").resolve()
 
 INPUT_PATH = DATA_PATH / "unprocessed"
 OUTPUT_PATH = DATA_PATH / "processed"
+CHECKPOINT_PATH = DATA_PATH / "checkpoints"
 PLOT_PATH = DATA_PATH / "plots"
 
 

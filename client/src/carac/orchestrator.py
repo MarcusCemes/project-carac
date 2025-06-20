@@ -1,6 +1,6 @@
 from typing import Sequence
 
-from httpx import AsyncClient, Request, Response
+from httpx import AsyncClient, Response
 
 from .instructions import Instruction
 
@@ -40,37 +40,37 @@ class Orchestrator:
     # == Public == #
 
     async def start_recording(self) -> None:
-        await self._call(Request("POST", "/start-recording"))
+        await self._call("POST", "/start-recording")
 
     async def stop_recording(self) -> None:
-        await self._call(Request("POST", "/stop-recording"))
+        await self._call("POST", "/stop-recording")
 
     async def execute(self, instructions: Instructions) -> None:
-        await self._call(Request("POST", "/execute", json=pack_i(instructions)))
+        await self._call("POST", "/execute", json=pack_i(instructions))
 
     async def record(self, instructions: Sequence[Instruction]) -> None:
-        await self._call(Request("POST", "/record", json=pack_i(instructions)))
+        await self._call("POST", "/record", json=pack_i(instructions))
 
     async def new_experiment(self, name: str) -> None:
-        await self._call(Request("POST", "/new-experiment", json={"name": name}))
+        await self._call("POST", "/new-experiment", json={"name": name})
 
     async def save_experiment(self) -> None:
-        await self._call(Request("POST", "/save-experiment"))
+        await self._call("POST", "/save-experiment")
 
     async def status(self) -> str:
-        response = await self._call(Request("GET", "/status"))
+        response = await self._call("GET", "/status")
         return response.text
 
     async def progress(self) -> float:
-        response = await self._call(Request("GET", "/progress"))
+        response = await self._call("GET", "/progress")
         return response.json().get("progress")
 
     # == Private == #
 
-    async def _call(self, request: Request) -> Response:
+    async def _call(self, *args, **kwargs) -> Response:
         assert self._client, "Context manger not entered"
 
-        response = await self._client.send(request)
+        response = await self._client.request(*args, **kwargs)
 
         if response.is_error:
             try:
@@ -84,5 +84,5 @@ class Orchestrator:
         return response
 
 
-def pack_i(instructions: Sequence[Instruction]) -> list:
-    return [i.toJSON() for i in instructions]
+def pack_i(instructions: Sequence[Instruction]) -> dict:
+    return {"instructions": [i.toJSON() for i in instructions]}

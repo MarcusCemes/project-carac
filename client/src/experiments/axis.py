@@ -15,25 +15,26 @@ from carac.helpers import (
     quat_multiply,
     quat_to_angle_rad,
     rad_to_deg,
+    deg_to_rad,
 )
 from carac.prelude import *
 
 
 # == Parameters == #
 
-WITH_DRONE = True
-ROT_SPEEDS_RAD: list[float] = [0.0, 0.1, 2.0]
-WIND_SPEEDS: list[float] = [0.0, 0.3, 0.5]
-SWEEPS: list[float] = [-1.0, 0.0, 0.5]
-THRUSTS: list[float] = [-1.0, 0.0, 0.5]
-N_RUNS: int = 2
+WITH_DRONE = False
+ROT_SPEEDS_RAD: list[float] = [0.0, 0.1, 1.0, 3.0, 5.0]
+WIND_SPEEDS: list[float] = [0.0, 0.5]
+SWEEPS: list[float] = [-1.0, 0.5]
+THRUSTS: list[float] = [-1.0]
+N_RUNS: int = 1
 
 
 # == Useful constants == #
 
 ANGLE_LIMITS: Vec3 = tuple(map(deg_to_rad, (50, 20, 15)))  # type: ignore
 DEVICE_NAME: str = "drone"
-ROBOT_FREQUENCY: float = 1 / 100
+ROBOT_FREQUENCY: float = 1 / 20
 
 
 class WorkingPoints(EnumDict):
@@ -44,6 +45,11 @@ class WorkingPoints(EnumDict):
 
     B = (
         Point(x=900, y=-300, z=700),
+        Config(),
+    )
+
+    C = (
+        Point(x=1200, y=-200, z=500),
         Config(),
     )
 
@@ -104,13 +110,13 @@ def iter_parameters():
                         yield Parameters(
                             speeds=speeds,  # type: ignore
                             wind=wind,
-                            sweep_l=sweep_l,
+                            sweep_l=-sweep_l,
                             sweep_r=sweep_r,
                             throttle=thrust,
                             runs=N_RUNS,
                         )
 
-    # Add a few coupled axis parameters
+    # # Add a few coupled axis parameters
     coupled_sweeps: list[float] = [-1.0, 0.0, 0.5]
     coupled_wind: list[float] = [0.0, 0.5]
     coupled_speeds: list[float] = [0.0, 2.0]
