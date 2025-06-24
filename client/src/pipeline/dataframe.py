@@ -2,7 +2,7 @@ from enum import EnumDict
 
 from pandas import DataFrame
 
-ROT_ANGLE_SEQ = "xyz"  # Extrinsic XYZ Euler angles
+ROT_ANGLE_SEQ = "xyz"  # Extrinsic Tait-Bryan angles (roll, pitch, yaw)
 
 
 class Columns(EnumDict):

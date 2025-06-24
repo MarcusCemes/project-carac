@@ -10,6 +10,7 @@ from .changes import (
     actuate_from_filename,
     add_idle_actuation,
     correct_load_orientation,
+    patch_robot_orientation,
     remap_sweep,
     remap_throttle,
     undo_sweep_l_fix,
@@ -26,6 +27,7 @@ STANDARD_OFFSET: Vec3 = (-1.12684e-02, -1.05960e-03, 1.85208e-01)
 LUT_46 = {0.46: 5.0}
 LUT_30_50 = {0.3: 4.1, 0.5: 5.8}
 LUT_48_50 = {0.49: 5.7, 0.5: 5.8}
+LUT_20_40_60 = {0.2: 2.3, 0.4: 5.2, 0.6: 6.5}
 
 
 # == Base class == #
@@ -96,6 +98,7 @@ class PlungeLoader(Loader):
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
         del experiment
+        patch_robot_orientation(df)
         correct_load_orientation(df)
         add_idle_actuation(df)
 
@@ -103,11 +106,11 @@ class PlungeLoader(Loader):
 class UncoupledAxisLoader(Loader):
     def __init__(self):
         super().__init__(name="axis-uncoupled", wind=WindLut(LUT_30_50))
-        self.path = INPUT_PATH / self.name
+        self.path = INPUT_PATH / "axis"
 
     def load_bundles(self) -> list[ExperimentBundle]:
-        loaded = self.read_experiments(self.path / "loaded")
-        unloaded = self.read_experiments(self.path / "unloaded")
+        loaded = self.read_experiments(self.path / "loaded")[0:486]
+        unloaded = self.read_experiments(self.path / "unloaded")[0:18]
 
         unloaded_calibrated = combine_strided_bundles(unloaded, 6)
 
@@ -124,6 +127,7 @@ class UncoupledAxisLoader(Loader):
         return bundles
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        patch_robot_orientation(df)
         actuate_from_filename(df, experiment)
         undo_sweep_l_fix(df)
         remap_sweep(df)
@@ -133,11 +137,11 @@ class UncoupledAxisLoader(Loader):
 class CoupledAxisLoader(Loader):
     def __init__(self):
         super().__init__(name="axis-coupled", wind=WindLut(LUT_30_50))
-        self.path = INPUT_PATH / self.name
+        self.path = INPUT_PATH / "axis"
 
     def load_bundles(self) -> list[ExperimentBundle]:
-        loaded = self.read_experiments(self.path / "loaded")
-        unloaded = self.read_experiments(self.path / "unloaded")
+        loaded = self.read_experiments(self.path / "loaded")[486:558]
+        unloaded = self.read_experiments(self.path / "unloaded")[18:26]
 
         loaded_calibrated = combine_strided_bundles(loaded, 36)
         unloaded_calibrated = combine_strided_bundles(unloaded, 4)
@@ -151,6 +155,7 @@ class CoupledAxisLoader(Loader):
         return bundles
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        patch_robot_orientation(df)
         actuate_from_filename(df, experiment)
         undo_sweep_l_fix(df)
         remap_sweep(df)
@@ -198,6 +203,7 @@ class FreeFlightLoader(Loader):
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
         del experiment
+        patch_robot_orientation(df)
         remap_sweep(df)
         remap_throttle(df)
 
@@ -219,6 +225,7 @@ class FreeFlightExtendedLoader(Loader):
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
         del experiment
+        patch_robot_orientation(df)
         remap_sweep(df)
         remap_throttle(df)
 
@@ -250,6 +257,34 @@ class FreeFlight2Loader(Loader):
 
     def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
         del experiment
+        patch_robot_orientation(df)
+        remap_sweep(df)
+        remap_throttle(df)
+
+
+class AttackRotationLoader(Loader):
+    def __init__(self):
+        super().__init__(name="attack-rotation", wind=WindLut(LUT_20_40_60))
+        self.path = INPUT_PATH / self.name
+
+    def load_bundles(self) -> list[ExperimentBundle]:
+        loaded = self.read_experiments(self.path / "loaded")
+        unloaded = self.read_experiments(self.path / "unloaded")
+
+        loaded_calibrated = combine_strided_bundles(loaded, 8)
+        unloaded_calibrated = combine_strided_bundles(unloaded, 8)
+
+        bundles = combine_calibrated_bundles(
+            positive_bundles=loaded_calibrated,
+            negative_bundles=unloaded_calibrated,
+        )
+
+        assert len(bundles) == 24
+        return bundles
+
+    def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        del experiment
+        patch_robot_orientation(df)
         remap_sweep(df)
         remap_throttle(df)
 
@@ -261,4 +296,5 @@ LOADERS: list[Loader] = [
     FreeFlightLoader(),
     FreeFlightExtendedLoader(),
     FreeFlight2Loader(),
+    AttackRotationLoader(),
 ]

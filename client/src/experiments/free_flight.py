@@ -12,88 +12,111 @@ from carac.prelude import *
 
 # == Parameters == #
 
-DURATION_S: int = 300
+DURATION_S: int = 30
 
-WIND_SPEED: float = 0.5
+WIND_SPEEDS: list[float] = [0.0, 0.2, 0.4, 0.6]
 # WING_L: float = 0.0  # O/C: 1 -> -0.5
 # WING_R: float = 0.0  # O/C: -1 -> 0.5
 # THROTTLE: float = -1
 
 ACTUATION_INTERVAL = 5.0
 POINT_FREQUENCY = 10
-PLOT = False
 
-WITH_DRONE = True
+WITH_DRONE = False
 DEVICE = "drone"
 
 LIMITS = {
-    "x": (-50.0, 50.0),
-    "y": (-50.0, 50.0),
-    "z": (-50.0, 50.0),
-    "rx": (-50.0, 50.0),
+    "x": (-100.0, 100.0),
+    "y": (-100.0, 100.0),
+    "z": (-100.0, 100.0),
+    "rx": (-40.0, 40.0),
     "ry": (-20.0, 20.0),
     "rz": (-15.0, 15.0),
 }
 
-SINE_PARAMS_A = {
-    "x": [
-        {"amp": 120.0, "freq": 0.4},
-        {"amp": 80, "freq": 1.2, "phase": 0.2},
-    ],
-    "y": [
-        {"amp": 120.0, "freq": 0.9, "phase": 0.15},
-        {"amp": 80, "freq": sqrt(1.3), "phase": 0.5},
-    ],
-    "z": [
-        {"amp": 120.0, "freq": 0.6, "phase": 0.05},
-        {"amp": 80, "freq": 0.3, "phase": 0.1},
-    ],
-    "rx": [
-        {"amp": 35, "freq": 0.7},
-        {"amp": 20, "freq": 0.5, "phase": 0.3},
-    ],
-    "ry": [
-        {"amp": 25, "freq": 0.8},
-        {"amp": 15, "freq": 0.6, "phase": 0.7},
-    ],
-    "rz": [
-        {"amp": 15, "freq": 0.7, "phase": 0.2},
-        {"amp": 8, "freq": sqrt(0.4), "phase": 0.8},
-    ],
-}
+SEEDS = [42, 1337, 101, 9999]
 
-SINE_PARAMS_B = {
-    "x": [
-        {"amp": 120.0, "freq": 0.4, "phase": 0.4},
-        {"amp": 80, "freq": 1.1, "phase": 0.2},
-    ],
-    "y": [
-        {"amp": 120.0, "freq": 1.1, "phase": 0.05},
-        {"amp": 80, "freq": sqrt(0.7), "phase": 0.5},
-    ],
-    "z": [
-        {"amp": 120.0, "freq": 0.7, "phase": 0.3},
-        {"amp": 80, "freq": 0.4, "phase": 0.1},
-    ],
-    "rx": [
-        {"amp": 35, "freq": 0.2},
-        {"amp": 20, "freq": 0.7, "phase": 0.6},
-    ],
-    "ry": [
-        {"amp": 25, "freq": 0.5},
-        {"amp": 15, "freq": 0.5, "phase": 0.7},
-    ],
-    "rz": [
-        {"amp": 15, "freq": 0.5, "phase": 0.2},
-        {"amp": 8, "freq": sqrt(0.8), "phase": 0.8},
-    ],
-}
+SINE_PARAMS = [
+    {
+        "x": [
+            {"amp": 120.0, "freq": 0.4},
+            {"amp": 80, "freq": 1.2, "phase": 0.2},
+        ],
+        "y": [
+            {"amp": 120.0, "freq": 0.9, "phase": 0.15},
+            {"amp": 80, "freq": sqrt(1.3), "phase": 0.5},
+        ],
+        "z": [
+            {"amp": 120.0, "freq": 0.6, "phase": 0.05},
+            {"amp": 80, "freq": 0.3, "phase": 0.1},
+        ],
+        "rx": [
+            {"amp": 35, "freq": 0.7},
+            {"amp": 20, "freq": 0.5, "phase": 0.3},
+        ],
+        "ry": [
+            {"amp": 25, "freq": 0.8},
+            {"amp": 15, "freq": 0.6, "phase": 0.7},
+        ],
+        "rz": [
+            {"amp": 15, "freq": 0.7, "phase": 0.2},
+            {"amp": 8, "freq": sqrt(0.4), "phase": 0.8},
+        ],
+    },
+    {
+        "x": [
+            {"amp": 120.0, "freq": 0.6, "phase": 0.4},
+            {"amp": 80, "freq": 0.8, "phase": 0.2},
+        ],
+        "y": [
+            {"amp": 120.0, "freq": 1.2, "phase": 0.05},
+            {"amp": 80, "freq": sqrt(0.7), "phase": 0.5},
+        ],
+        "z": [
+            {"amp": 120.0, "freq": 0.7, "phase": 0.3},
+            {"amp": 80, "freq": 0.4, "phase": 0.1},
+        ],
+        "rx": [
+            {"amp": 35, "freq": 0.2},
+            {"amp": 20, "freq": 0.7, "phase": 0.6},
+        ],
+        "ry": [
+            {"amp": 25, "freq": 0.5},
+            {"amp": 15, "freq": 0.5, "phase": 0.7},
+        ],
+        "rz": [
+            {"amp": 15, "freq": 0.5, "phase": 0.2},
+            {"amp": 8, "freq": sqrt(0.8), "phase": 0.8},
+        ],
+    },
+    {
+        "x": [
+            {"amp": 120.0, "freq": 0.7, "phase": 1.2},
+            {"amp": 50.0, "freq": 0.4, "phase": 2.3},
+        ],
+        "y": [
+            {"amp": 120.0, "freq": 0.95, "phase": 1.3},
+            {"amp": 50.0, "freq": sqrt(0.5), "phase": 0.7},
+        ],
+        "z": [
+            {"amp": 120.0, "freq": 0.6, "phase": 0.8},
+            {"amp": 50.0, "freq": 0.4, "phase": 0.3},
+        ],
+        "rx": [
+            {"amp": 30.0, "freq": 0.3, "phase": 0.5},
+            {"amp": 16.0, "freq": sqrt(0.6), "phase": 1.2},
+        ],
+        "ry": [
+            {"amp": 25.0, "freq": 0.9, "phase": 0.4},
+            {"amp": 11.0, "freq": 0.7, "phase": 0.6},
+        ],
+        "rz": [
+            {"amp": 15.0, "freq": 0.2, "phase": 1.5},
+            {"amp": 8.0, "freq": sqrt(1.1), "phase": 2.3},
+        ],
+    },
+]
 
-
-SEED_V1 = 42
-SEED_V2 = 1337
-SEED_V3 = 101
-SEED_V4 = 9999
 
 SINE_PARAMS_STRUCTURE = {
     "x": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
@@ -107,21 +130,17 @@ SINE_PARAMS_STRUCTURE = {
 
 # == Definitions == #
 
-WORK_POINT = Points.DroneBase.add(Point(x=600, y=-50, z=-200))
+# WORK_POINT = Points.DroneBase.add(Point(x=600, y=-50, z=-200))
+WORK_POINT = Points.DroneBase.add(Point(x=600, y=-50, z=-250))
 
 
 # == Implementation == #
 
 
 async def main():
-    seed = SEED_V3
-
-    # params = generate_sine_variation(SINE_PARAMS_STRUCTURE, LIMITS, seed=seed)
-    generator = SineTrajectoryGenerator(LIMITS, SINE_PARAMS_A)
-
     async with Orchestrator() as o:
         await init(o)
-        await run_experiment(o, generator, seed)
+        await execute(o)
         await finalise(o)
 
 
@@ -131,7 +150,7 @@ async def init(o: Orchestrator) -> None:
             [
                 Reset(),
                 *([Device(DEVICE, DRONE_NO_ACTUATION)] if WITH_DRONE else []),
-                Robot(SetConfig(Config())),
+                Robot(SetConfig(Configs.Free)),
                 Robot(SetProfile(Profiles.Fast)),
                 Robot(ReturnHome()),
                 Robot(WaitSettled()),
@@ -141,33 +160,13 @@ async def init(o: Orchestrator) -> None:
                 Robot(SetBlending(Blends.Zero)),
                 Robot(Move(MotionLinear(WORK_POINT))),
                 Robot(WaitSettled()),
-                Robot(SetBlending(Blends.Small)),
-                Robot(SetProfile(Profiles.Fast)),
+                Wind(SetPowered(True)),
             ]
         )
-
-        status.update("Biasing")
-        await o.execute(
-            [
-                Sleep(1),
-                Load(SetBias()),
-                # Removed in favour of random actuation
-                # Device(DEVICE, [THROTTLE, WING_L, WING_R, 0.0, 0.0]),
-            ]
-        )
-
-        if WIND_SPEED > 0.0:
-            status.update("Settling wind speed")
-            await o.execute(
-                [
-                    Wind(SetPowered(True)),
-                    Wind(SetFanSpeed(WIND_SPEED)),
-                    Wind(WaitSettled()),
-                ]
-            )
 
 
 async def finalise(o: Orchestrator) -> None:
+
     await o.execute(
         [
             Wind(SetPowered(False)),
@@ -179,104 +178,132 @@ async def finalise(o: Orchestrator) -> None:
     )
 
 
-async def run_experiment(
-    o: Orchestrator, generator: BaseTrajectoryGenerator, seed: int
-) -> None:
-
+async def execute(o: Orchestrator) -> None:
     with ExperimentTui() as ui:
         ui.update(
             title="Free-Flight",
             total_progress=None,
             message="Generating trajectory",
+            status=ExperimentStatus.IDLE,
         )
 
-        all_points = []
-        instructions = []
+        for wind in WIND_SPEEDS:
+            for i in range(3):
+                params = SINE_PARAMS[i]
+                seed = SEEDS[i]
+                generator = SineTrajectoryGenerator(LIMITS, params)
 
-        random_actuation = Random(56)
-        last_actuation = 0.0
+                ui.update(title=f"Free-Flight (p={i}, w={wind}, d={seed})")
+                await run_parameters(o, generator, i, seed, wind, ui)
 
-        for i in range(DURATION_S):
-            timesteps = [i + k / POINT_FREQUENCY for k in range(POINT_FREQUENCY)]
-            points = [generator.get_trajectory_point(t) for t in timesteps]
 
-            for point in points:
-                profile = Profile(
-                    limit=ProfileLimit(
-                        translation=point.velocity_t,
-                        rotation=rad_to_deg(point.velocity_r),
-                    )
+async def run_parameters(
+    o: Orchestrator,
+    generator: BaseTrajectoryGenerator,
+    p: int,
+    seed: int,
+    wind: float,
+    ui: ExperimentTui,
+):
+    ui.update(message="Computing trajectory")
+
+    instructions = []
+
+    random_actuation = Random(56)
+    last_actuation = 0.0
+
+    for i in range(DURATION_S):
+        timesteps = [i + k / POINT_FREQUENCY for k in range(POINT_FREQUENCY)]
+        points = [generator.get_trajectory_point(t) for t in timesteps]
+
+        for point in points:
+            profile = Profile(
+                limit=ProfileLimit(
+                    translation=point.velocity_t,
+                    rotation=rad_to_deg(point.velocity_r),
                 )
-
-                if PLOT:
-                    all_points.append(point.pose)
-
-                point = WORK_POINT.add(point.pose)
-
-                actuation = [
-                    random_actuation.uniform(-1, 0.5),
-                    random_actuation.uniform(-0.5, 1.0),
-                    random_actuation.uniform(-1.0, 0.5),
-                    0.0,
-                    0.0,
-                ]
-
-                instructions.append(Robot(SetProfile(profile)))
-                instructions.append(Robot(Move(MotionLinear(point))))
-                instructions.append(Sleep(1 / POINT_FREQUENCY))
-
-                if WITH_DRONE and last_actuation >= ACTUATION_INTERVAL:
-                    instructions.append(Device(DEVICE, actuation))
-                    last_actuation = 0.0
-
-            instructions.append(Robot(WaitProgress((i + 1) * POINT_FREQUENCY - 10)))
-
-            last_actuation += 1
-
-        # Allow the robot to settle at the final point
-        instructions.insert(-3, Robot(SetBlending(Blends.Zero)))
-        instructions.insert(-3, Robot(SetProfile(Profiles.Fast)))
-
-        # Wait until the robot completes the trajectory
-        instructions.append(Robot(WaitSettled()))
-
-        if not PLOT:
-            ui.update(
-                message="Executing trajectory",
-                status=ExperimentStatus.RUNNING,
-                total_progress=DURATION_S,
             )
 
-            task = get_event_loop().create_task(status_task(o, ui))
+            point = WORK_POINT.add(point.pose)
 
-            experiment_name = format_name("free-flight", {"w": WIND_SPEED, "d": seed})
-            await o.new_experiment(experiment_name)
+            actuation = [
+                random_actuation.uniform(-1, 0.5),
+                random_actuation.uniform(-0.5, 1.0),
+                random_actuation.uniform(-1.0, 0.5),
+                0.0,
+                0.0,
+            ]
 
-            await o.execute(
-                [
-                    instructions[3],
-                    Robot(WaitSettled()),
-                    Robot(ResetMoveId()),
-                ]
-            )
+            instructions.append(Robot(SetProfile(profile)))
+            instructions.append(Robot(Move(MotionLinear(point))))
+            instructions.append(Sleep(1 / POINT_FREQUENCY))
 
-            await o.record(
-                [
-                    *instructions,
-                    Wind(SetFanSpeed()),
-                    *([Device(DEVICE, DRONE_NO_ACTUATION)] if WITH_DRONE else []),
-                    Robot(SetBlending(Blends.Zero)),
-                    Robot(Move(MotionLinear(WORK_POINT))),
-                ]
-            )
+            if WITH_DRONE and last_actuation >= ACTUATION_INTERVAL:
+                instructions.append(Device(DEVICE, actuation))
+                last_actuation = 0.0
 
-            ui.update(message="Saving experiment", status=ExperimentStatus.COMPLETE)
-            await o.save_experiment()
+        instructions.append(Robot(WaitProgress((i + 1) * POINT_FREQUENCY - 10)))
 
-            task.cancel()
+        last_actuation += 1
 
-    if PLOT:
-        plot_trajectory(all_points)
+    # Wait until the robot completes the trajectory
+    instructions.append(Robot(WaitSettled()))
+
+    ui.update(
+        message="Executing trajectory",
+        status=ExperimentStatus.RUNNING,
+        total_progress=DURATION_S,
+    )
+
+    task = get_event_loop().create_task(status_task(o, ui))
+
+    experiment_name = format_name("free-flight", {"p": p, "w": wind, "d": seed})
+    await o.new_experiment(experiment_name)
+
+    ui.update(message="Biasing")
+    await o.execute(
+        [
+            Robot(SetBlending(Blends.Small)),
+            Robot(SetProfile(Profiles.Fast)),
+            Robot(WaitSettled()),
+            Sleep(1),
+            Load(SetBias()),
+        ]
+    )
+
+    if wind > 0.0:
+        ui.update(message="Settling wind")
+        await o.execute(
+            [
+                Wind(SetFanSpeed(wind)),
+                Wind(WaitSettled()),
+            ]
+        )
+
+    await o.execute(
+        [
+            instructions[3],
+            Robot(WaitSettled()),
+            Robot(ResetMoveId()),
+        ]
+    )
+
+    ui.update(message="Recording experiment", status=ExperimentStatus.RUNNING)
+    await o.record(
+        [
+            *instructions,
+            # Saving takes a while, so we can power down here
+            Wind(SetFanSpeed()),
+            *([Device(DEVICE, DRONE_NO_ACTUATION)] if WITH_DRONE else []),
+            Robot(SetBlending(Blends.Zero)),
+            Robot(Move(MotionLinear(WORK_POINT))),
+        ]
+    )
+
+    ui.update(message="Saving experiment", status=ExperimentStatus.COMPLETE)
+    await o.save_experiment()
+
+    task.cancel()
 
 
 async def status_task(o: Orchestrator, ui: ExperimentTui) -> None:
@@ -376,13 +403,13 @@ def generate_sine_variation(
         for i in range(num_components):
             comp = {
                 # Add a small jitter to the amplitude for variety
-                "amp": round(amplitudes[i] * rng.uniform(0.85, 1.0), 2),
+                "amp": round(amplitudes[i] * rng.uniform(0.8, 1.0), 2),
                 # Randomize frequency within a reasonable range
                 "freq": (
-                    round(rng.uniform(0.2, 1.5), 3)
+                    round(rng.uniform(0.4, 0.9), 3)
                     # Higher frequencies for pitching
                     if axis != "rx"
-                    else round(rng.uniform(0.2, 3.0), 3)
+                    else round(rng.uniform(0.4, 1.3), 3)
                 ),
             }
 

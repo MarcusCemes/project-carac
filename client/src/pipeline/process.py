@@ -77,10 +77,11 @@ def add_body_frame_kinematics(df: DataFrame, wind: WindLut) -> None:
     euler_angles_rad = df[Columns.WorldRotation].to_numpy()
     unwrapped_euler = np.unwrap(euler_angles_rad, axis=0)
     rot = Rotation.from_euler(ROT_ANGLE_SEQ, unwrapped_euler)
-    df[Columns.Attitude] = rot.as_quat()
+    quats = rot.as_quat()
+
+    df[Columns.Attitude] = quats
 
     # a) Get quaternion array and ensure continuity
-    quats = rot.as_quat()
     for i in range(1, len(quats)):
         # If the dot product is negative, the quaternions are pointing in
         # "opposite" directions, so we flip the sign of the current one.
@@ -162,7 +163,7 @@ def add_aero_forces(
 
     drag = -forces_wind_frame[:, 0]
     side_force = forces_wind_frame[:, 1]
-    lift = -forces_wind_frame[:, 2]
+    lift = forces_wind_frame[:, 2]
 
     df[output_cols] = np.vstack([drag, side_force, lift]).T
 

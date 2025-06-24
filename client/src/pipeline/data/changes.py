@@ -1,7 +1,33 @@
 from pandas import DataFrame
+from scipy.spatial.transform import Rotation as R
 
 from ..data.utils import LoadedExperiment
-from ..dataframe import Columns
+from ..dataframe import ROT_ANGLE_SEQ, Columns
+
+
+def patch_robot_orientation(df: DataFrame) -> None:
+    """
+    Corrects flawed robot orientation data by undoing the pre-processing
+    done by the orchestrator, re-interpreting the angles as intrinsic
+    and then transforming them to the drone's coordinate system.
+    """
+    robot_angles = df[Columns.WorldRotation].to_numpy()
+
+    # Undo the incorrect component swap to recover the original angles
+    robot_angles[:, [0, 1]] = robot_angles[:, [1, 0]]
+    robot_angles[:, 0] = -robot_angles[:, 0]
+
+    # Create a ground-truth rotation object from the original angles
+    rot_in_robot_frame = R.from_euler("XYZ", robot_angles)
+
+    # Define the transform from the robot frame to the world frame
+    C = R.from_euler("z", -90, degrees=True)
+
+    # Change of basis into the robot's frame, apply the rotation, and change back
+    rot_in_drone_frame = C * rot_in_robot_frame * C.inv()
+
+    corrected_world_angles = rot_in_drone_frame.as_euler(ROT_ANGLE_SEQ)
+    df[Columns.WorldRotation] = corrected_world_angles
 
 
 def correct_load_orientation(df: DataFrame) -> None:
