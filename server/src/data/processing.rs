@@ -145,42 +145,43 @@ impl StreamInterpolator<'_> {
     }
 
     fn next(&mut self, time: f32, data: &mut [f32]) -> bool {
-        // Get a mutable reference to the cursor and compute its timestamp
         let Some(cursor) = self.cursor.as_mut() else {
             return false;
         };
 
-        let cursor_time = f32::from(cursor.time);
-
-        // Keep advancing the cursor until we find the closest pre-time sample
         while let Some(next_sample) = self.iter_samples.peek() {
             if f32::from(next_sample.time) > time {
                 break;
             }
 
+            // SAFETY: We just peeked the next sample, so it exists
             *cursor = unsafe { self.iter_samples.next().unwrap_unchecked() };
         }
 
-        // Peek at the next sample, or return the current sample if we exhausted the iterator
+        // Now that the cursor is in the correct position, read its time
+        let cursor_time = f32::from(cursor.time);
+
         let Some(next_cursor) = self.iter_samples.peek() else {
             data.copy_from_slice(cursor.channel_data);
             return true;
         };
 
-        // Interpolate between the two samples, clamping the time value (no extrapolation)
+        // Interpolate between the two samples
         let lt = cursor_time;
         let rt = f32::from(next_cursor.time);
-        let t = (time - lt) / (rt - lt);
 
-        if t.is_nan() {
+        // Handle cases where samples have the same timestamp to avoid division by zero
+        if lt == rt {
             data.copy_from_slice(cursor.channel_data);
             return true;
         }
 
+        let t = (time - lt) / (rt - lt);
+
         // Don't extrapolate beyond the first or last sample
         let t = t.clamp(0., 1.);
 
-        // Compute the channel interpolation and return buffer
+        // Compute the channel interpolation and fill the output buffer
         let l = cursor.channel_data.iter();
         let r = next_cursor.channel_data.iter();
         let o = data.iter_mut();
