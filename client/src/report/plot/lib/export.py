@@ -14,6 +14,7 @@ def save_figure_tikz(path: Path, fig: Figure | None = None, ax: Axes | None = No
 
     ax.axis("off")
 
+    print("Saving TikZ figure to", path)
     fig.savefig(
         path.with_suffix(".eps"),
         bbox_inches="tight",
@@ -32,10 +33,7 @@ def _save_tikz_code(ax: Axes, path: Path):
 
     content = f"""\\begin{{tikzpicture}}
     \\begin{{axis}}[
-        xmin={xlim[0]},
-        xmax={xlim[1]},
-        ymin={ylim[0]},
-        ymax={ylim[1]},
+        xmin={xlim[0]}, xmax={xlim[1]}, ymin={ylim[0]}, ymax={ylim[1]},
         xlabel={{{ax.get_xlabel().replace("_", r"\_")}}},
         ylabel={{{ax.get_ylabel().replace("_", r"\_")}}},
         axis line style={{-}},
@@ -45,10 +43,7 @@ def _save_tikz_code(ax: Axes, path: Path):
         height=0.667\\columnwidth
     ]
     \\addplot graphics [
-        xmin={xlim[0]},
-        xmax={xlim[1]},
-        ymin={ylim[0]},
-        ymax={ylim[1]}
+        xmin={xlim[0]}, xmax={xlim[1]}, ymin={ylim[0]}, ymax={ylim[1]}
     ] {{{path.with_suffix(".eps").name}}};
     \\end{{axis}}
 \\end{{tikzpicture}}

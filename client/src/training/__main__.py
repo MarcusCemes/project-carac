@@ -1,10 +1,10 @@
-from .datasets import FreeFlight2Dataset
+from .datasets import AxisDataset
 from .defs import *
 from .train import train_and_save_models
 
 
 def main():
-    dataset = FreeFlight2Dataset()
+    dataset = AxisDataset()
     train_and_save_models(dataset)
 
 

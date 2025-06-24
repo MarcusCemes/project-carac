@@ -129,7 +129,7 @@ impl DataSink {
     }
 
     pub async fn clear_buffers(&self) {
-        let lock = self.inner.shared.write().await;
+        let lock = self.inner.shared.read().await;
         let mut buffer_lock = lock.buffers.lock().await;
 
         for buffer in &mut *buffer_lock {

@@ -25,27 +25,38 @@ class Experiment:
 
 
 TITLE = "Lift & Drag Aerodynamic Forces"
-LABELS = ("Roll 2.0 rad/s", "Pitch/Roll 2.0 rad/s")
+LABELS = ("0.1 rad/s", "2.0 rad/s")
 
-PITCH_EXPERIMENT = Experiment(
-    "pitch",
-    (find_experiment("axis-uncoupled", 16), find_experiment("axis-uncoupled", 17)),
-    Columns.AeroAngles[0],  # 'alpha'
-    "Angle of Attack α",
+# # Attack 10 degrees
+# ROLL_EXPERIMENT = Experiment(
+#     "roll",
+#     (find_experiment("attack-rotations", 24), find_experiment("attack-rotations", 25)),
+#     Columns.WorldRotation[0],  # 'roll'
+#     "Roll Angle φ",
+# )
+
+
+# YAW_EXPERIMENT = Experiment(
+#     "yaw",
+#     (find_experiment("attack-rotations", 26), find_experiment("attack-rotations", 27)),
+#     Columns.AeroAngles[1],  # 'beta'
+#     "Angle of Sideslip β",
+# )
+
+# # Attach 30 degrees
+ROLL_EXPERIMENT = Experiment(
+    "roll",
+    (find_experiment("attack-rotations", 28), find_experiment("attack-rotations", 29)),
+    Columns.WorldRotation[0],  # 'roll'
+    "Roll Angle φ",
 )
+
 
 YAW_EXPERIMENT = Experiment(
     "yaw",
-    (find_experiment("axis-uncoupled", 12), find_experiment("axis-uncoupled", 13)),
+    (find_experiment("attack-rotations", 30), find_experiment("attack-rotations", 31)),
     Columns.AeroAngles[1],  # 'beta'
     "Angle of Sideslip β",
-)
-
-ROLL_EXPERIMENT = Experiment(
-    "roll",
-    (find_experiment("axis-uncoupled", 14), find_experiment("axis-uncoupled", 15)),
-    Columns.WorldRotation[0],  # 'roll'
-    "Roll Angle φ",
 )
 
 
@@ -72,7 +83,7 @@ COLOURS_2 = {
 
 
 def main():
-    for experiment in (PITCH_EXPERIMENT, YAW_EXPERIMENT, ROLL_EXPERIMENT):
+    for experiment in (ROLL_EXPERIMENT, YAW_EXPERIMENT):
         [df1, df2] = map(pd.read_parquet, experiment.files)
 
         # Remove some annoying outliers
@@ -142,7 +153,7 @@ def main():
 
         plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
 
-        name = f"aero_{experiment.name}"
+        name = f"attack_{experiment.name}"
         PLOT_PATH.mkdir(parents=True, exist_ok=True)
 
         if "--save" in argv:
@@ -204,7 +215,8 @@ def main():
 
             plt.close(fig_tikz_drag)
 
-    plt.show()
+    if "--tikz" not in argv and "--save" not in argv:
+        plt.show()
 
 
 def plot_aero_force(

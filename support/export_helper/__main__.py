@@ -1,5 +1,5 @@
 from pathlib import Path
-from shutil import move
+from shutil import move, rmtree
 from subprocess import run
 
 ROOT_PATH = Path(__file__).parent.parent.parent.resolve()
@@ -72,7 +72,12 @@ def export_session(session_path: str, output_path: str, divisions: int) -> None:
             f"Failed to export session {session_path} with return code {result.returncode}"
         )
 
-    move(session / "output", UNPROCESSED_PATH / output_path)
+    destination = UNPROCESSED_PATH / output_path
+
+    if destination.exists():
+        rmtree(destination)
+
+    move(session / "output", destination)
 
 
 if __name__ == "__main__":

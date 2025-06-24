@@ -16,21 +16,26 @@ class Opts:
     xlabel: str
 
 
-FILE = find_experiment("axis-uncoupled", 13)
+# FILE = find_experiment("axis-uncoupled", 13)
+# FILE = find_experiment("plunge", 14)
+# FILE = find_experiment("attack-rotations", 28)
+FILE = find_experiment("attack-rotations", 24)
 
 OPTS: list[Opts] = [
     Opts(
         Columns.AeroAngles[0],
-        "Alpha α (rad)",
+        # Columns.Time,
+        "Alpha α [rad]",
     ),
     Opts(
         Columns.AeroAngles[1],
-        "Beta β (rad)",
+        # Columns.Time,
+        "Beta β [rad]",
     ),
-    # Opts(
-    #     Columns.Time,
-    #     "Time (s)",
-    # ),
+    Opts(
+        Columns.Time,
+        "Time [s]",
+    ),
 ]
 
 
@@ -45,10 +50,10 @@ def main():
 
 def plot_model(df: pd.DataFrame):
     for opts in OPTS:
-        fig = plt.figure()
-        ax = fig.gca()
+        _, axs = plt.subplots(1, 2)
 
-        df.plot(**asdict(opts), y=Columns.AeroForcesModel, ax=ax)
+        df.plot(**asdict(opts), y=Columns.AeroForcesModel, ax=axs[0])
+        df.plot(**asdict(opts), y=Columns.BodyForceModel, ax=axs[1])
 
         plt.title(f"Aerodynamic Forces Model ({opts.xlabel})")
         plt.tight_layout()

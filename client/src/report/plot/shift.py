@@ -10,13 +10,15 @@ from .defs import *
 from .lib.export import save_figure_tikz
 
 
-INPUT_1 = INPUT_PATH / "0001_high-samples.parquet"
-INPUT_2 = INPUT_PATH / "0002_high-samples.parquet"
+INPUT_1 = INPUT_PATH / "0001_high_samples.parquet"
+INPUT_2 = INPUT_PATH / "0002_high_samples.parquet"
 
 COL_X = "time"
 COL_Y = "fx"
 
 OUTPUT_PATH = PLOT_PATH / "shift"
+
+LINE_WIDTH = 1.0
 
 
 def main():
@@ -30,7 +32,8 @@ def main():
         print(f"Calculated Time Shift: {1e9 * calculated_shift} ns")
         print(f"(A positive value means FILE_2 is delayed relative to FILE_1")
 
-        plot_results(df1, df2, calculated_shift)
+        # plot_comparison(df1, df2, calculated_shift)
+        plot_results(df1, df2)
 
 
 def find_time_shift(df1: pd.DataFrame, df2: pd.DataFrame):
@@ -126,12 +129,28 @@ def find_time_shift_fast(
     return time_shift, correlation
 
 
-def plot_results(df1: pd.DataFrame, df2: pd.DataFrame, calculated_shift: float):
-    _, axes = plt.subplots(2, 1, sharex=True)
+def plot_comparison(df1: pd.DataFrame, df2: pd.DataFrame, calculated_shift: float):
+    fig, axes = plt.subplots(2, 1, sharex=True)
 
     # Plot 1: Original Data
-    axes[0].plot(df1[COL_X], df1[COL_Y], "o-", label="Dataset 1", alpha=0.7)
-    axes[0].plot(df2[COL_X], df2[COL_Y], "o-", label="Dataset 2", alpha=0.7)
+    axes[0].plot(
+        df1[COL_X],
+        df1[COL_Y],
+        "o-",
+        label="Dataset 1",
+        alpha=0.7,
+        linewidth=LINE_WIDTH,
+    )
+
+    axes[0].plot(
+        df2[COL_X],
+        df2[COL_Y],
+        "o-",
+        label="Dataset 2",
+        alpha=0.7,
+        linewidth=LINE_WIDTH,
+    )
+
     axes[0].set_title("Original Data")
     axes[0].set_ylabel(COL_Y)
     axes[0].legend()
@@ -156,26 +175,24 @@ def plot_results(df1: pd.DataFrame, df2: pd.DataFrame, calculated_shift: float):
 
     plt.tight_layout()
 
+
+def plot_results(df1: pd.DataFrame, df2: pd.DataFrame):
+    fig = plt.figure(figsize=TIKZ_SIZE)
+    ax = fig.gca()
+
+    idx1 = (df1[COL_X] >= 330) & (df1[COL_X] <= 331)
+    idx2 = (df2[COL_X] >= 330) & (df2[COL_X] <= 331)
+
+    df1[idx1].plot.line(x=COL_X, y=COL_Y, ax=ax, c="#ee6677", linewidth=LINE_WIDTH)
+    df2[idx2].plot.line(x=COL_X, y=COL_Y, ax=ax, c="#4477aa", linewidth=LINE_WIDTH)
+
     if "--tikz" in argv:
-        fig = plt.figure(figsize=TIKZ_SIZE)
-        ax = fig.gca()
-
-        idx1 = (df1[COL_X] >= 330) & (df1[COL_X] <= 331)
-        idx2 = (df2[COL_X] >= 330) & (df2[COL_X] <= 331)
-
-        df1[idx1].plot.line(
-            x=COL_X, y=COL_Y, ax=ax, marker="o", markersize=2, c="#ee6677"
-        )
-        df2[idx2].plot.line(
-            x=COL_X, y=COL_Y, ax=ax, marker="o", markersize=2, c="#4477aa"
-        )
-
         ax.legend().remove()
         save_figure_tikz(OUTPUT_PATH)
-
         plt.close(fig)
 
-    # plt.show()
+    else:
+        plt.show()
 
 
 if __name__ == "__main__":

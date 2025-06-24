@@ -13,9 +13,8 @@ PLOT_PATH = DATA_PATH / "plots"
 
 
 DPI_IMAGE = 600
-TIKZ_SIZE = (6, 4)
+TIKZ_SIZE = (5, 3)
 
-plt.style.use("seaborn-v0_8")
 plt.rcParams["figure.figsize"] = (8, 6)
 plt.rcParams["figure.dpi"] = 100
 plt.rcParams["scatter.edgecolors"] = "none"

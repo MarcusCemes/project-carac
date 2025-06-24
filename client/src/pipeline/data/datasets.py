@@ -262,9 +262,36 @@ class FreeFlight2Loader(Loader):
         remap_throttle(df)
 
 
+class FreeFlight3Loader(Loader):
+    def __init__(self):
+        super().__init__(name="free-flight-3", wind=WindLut(LUT_20_40_60))
+        self.path = INPUT_PATH / self.name
+
+    def load_bundles(self) -> list[ExperimentBundle]:
+        loaded = self.read_experiments(self.path / "loaded")
+        unloaded = self.read_experiments(self.path / "unloaded")
+
+        loaded_calibrated = combine_strided_bundles(loaded, 3)
+        unloaded_calibrated = combine_strided_bundles(unloaded, 3)
+
+        bundles = combine_calibrated_bundles(
+            positive_bundles=loaded_calibrated,
+            negative_bundles=unloaded_calibrated,
+        )
+
+        assert len(bundles) == 9
+        return bundles
+
+    def preprocess(self, df: DataFrame, experiment: LoadedExperiment) -> None:
+        del experiment
+        patch_robot_orientation(df)
+        remap_sweep(df)
+        remap_throttle(df)
+
+
 class AttackRotationLoader(Loader):
     def __init__(self):
-        super().__init__(name="attack-rotation", wind=WindLut(LUT_20_40_60))
+        super().__init__(name="attack-rotations", wind=WindLut(LUT_20_40_60))
         self.path = INPUT_PATH / self.name
 
     def load_bundles(self) -> list[ExperimentBundle]:
@@ -296,5 +323,6 @@ LOADERS: list[Loader] = [
     FreeFlightLoader(),
     FreeFlightExtendedLoader(),
     FreeFlight2Loader(),
+    FreeFlight3Loader(),
     AttackRotationLoader(),
 ]

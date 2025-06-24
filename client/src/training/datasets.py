@@ -45,6 +45,11 @@ class FreeFlight2Dataset(SequentialFlightDataset):
         super().__init__("free-flight-2")
 
 
+class AxisDataset(SequentialFlightDataset):
+    def __init__(self):
+        super().__init__("axis-uncoupled")
+
+
 def _load_dataframes(name: str) -> tuple[Tensor, Tensor, Tensor]:
     with Status("Loading data..."):
         count = 0
