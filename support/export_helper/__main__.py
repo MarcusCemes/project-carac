@@ -30,16 +30,26 @@ LARGE_EXPERIMENTS = [
     ("free-flight-2-unloaded", "free-flight-2/unloaded"),
     ("free-flight-3", "free-flight-3/loaded"),
     ("free-flight-3-unloaded", "free-flight-3/unloaded"),
+]
+
+HUGE_EXPERIMENTS = [
     ("free-flight-extended", "free-flight-extended"),
 ]
 
 
-def main():
-    for input, output in SMALL_EXPERIMENTS:
-        export_session(input, output, 1000)
+jobs = [
+    (SMALL_EXPERIMENTS, 1000),
+    (LARGE_EXPERIMENTS, 10000),
+    (HUGE_EXPERIMENTS, 100000),
+]
 
-    for input, output in LARGE_EXPERIMENTS:
-        export_session(input, output, 10000)
+STD_ARGS = ["export", "-c", "10", "--order", "3", "-f", "parquet", "-r", "0"]
+
+
+def main():
+    for job_set, divisions in jobs:
+        for input, output in job_set:
+            export_session(input, output, divisions)
 
 
 def export_session(session_path: str, output_path: str, divisions: int) -> None:
@@ -52,15 +62,7 @@ def export_session(session_path: str, output_path: str, divisions: int) -> None:
     result = run(
         [
             str(KIT_PATH),
-            "export",
-            "-c",
-            "10",
-            "--order",
-            "3",
-            "-f",
-            "parquet",
-            "-r",
-            "0",
+            *STD_ARGS,
             "-d",
             str(divisions),
             str(session),

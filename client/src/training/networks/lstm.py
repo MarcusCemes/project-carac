@@ -1,5 +1,13 @@
 from torch.nn import Module, LSTM, Linear
 
+from ..defs import (
+    INPUT_COLUMNS,
+    OUTPUT_COLUMNS,
+    LSTM_HIDDEN_SIZE,
+    LSTM_NUM_LAYERS,
+    LSTM_SEQUENCE_LENGTH,
+)
+
 
 class LSTMNet(Module):
     """
@@ -61,3 +69,12 @@ class LSTMNet(Module):
         # Pass the last time step's output through the final fully connected layer
         out = self.fc(last_time_step_output)
         return out
+
+    @staticmethod
+    def default() -> "LSTMNet":
+        return LSTMNet(
+            input_size=len(INPUT_COLUMNS),
+            hidden_size=LSTM_HIDDEN_SIZE,
+            num_layers=LSTM_NUM_LAYERS,
+            output_size=len(OUTPUT_COLUMNS),
+        )

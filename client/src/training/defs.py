@@ -4,10 +4,10 @@ from pathlib import Path
 from pipeline.dataframe import Columns
 
 # Network configuration
-MLP_HIDDEN_LAYERS = [128, 128, 64]  # List of hidden layer sizes for the MLP
+MLP_HIDDEN_LAYERS = [128, 64, 64]  # List of hidden layer sizes for the MLP
 LSTM_NUM_LAYERS = 2  # Number of recurrent layers in the LSTM
-LSTM_HIDDEN_SIZE = 64  # Number of features in the hidden state of the LSTM
-LSTM_SEQUENCE_LENGTH = 20  # Number of time steps to consider in LSTM
+LSTM_HIDDEN_SIZE = 32  # Number of features in the hidden state of the LSTM
+LSTM_SEQUENCE_LENGTH = 5  # Number of time steps to consider in LSTM
 
 # Training configuration
 LEARNING_RATE = 0.001

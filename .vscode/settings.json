@@ -1,13 +1,9 @@
 {
   "python.analysis.packageIndexDepths": [
-    {
-      "name": "rclpy",
-      "depth": 8
-    },
-    {
-      "name": "scipy",
-      "depth": 8
-    }
+    { "name": "rclpy", "depth": 8 },
+    { "name": "rich", "depth": 8 },
+    { "name": "scipy", "depth": 8 },
+    { "name": "torch", "depth": 8 }
   ],
   "python.analysis.diagnosticSeverityOverrides": {
     "reportWildcardImportFromLibrary": "none"

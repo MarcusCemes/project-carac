@@ -1,7 +1,11 @@
 from torch.nn import Module, Linear, ReLU, Dropout, Sequential
+from training.defs import INPUT_COLUMNS, OUTPUT_COLUMNS, MLP_HIDDEN_LAYERS
 
 
-class MLP(Module):
+DROPOUT = 0.1
+
+
+class MLPNet(Module):
     """
     A configurable Multi-Layer Perceptron (MLP).
 
@@ -20,9 +24,9 @@ class MLP(Module):
         input_size: int,
         output_size: int,
         hidden_sizes: list[int],
-        dropout_p: float = 0.1,
+        dropout_p: float = DROPOUT,
     ):
-        super(MLP, self).__init__()
+        super(MLPNet, self).__init__()
 
         self.input_size = input_size
         self.output_size = output_size
@@ -44,3 +48,11 @@ class MLP(Module):
 
     def forward(self, x):
         return self.net(x)
+
+    @staticmethod
+    def default() -> "MLPNet":
+        return MLPNet(
+            len(INPUT_COLUMNS),
+            len(OUTPUT_COLUMNS),
+            MLP_HIDDEN_LAYERS,
+        )
