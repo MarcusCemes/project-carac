@@ -1,6 +1,7 @@
 from torch.nn import Module, LSTM, Linear
 
 from ..defs import (
+    DROPOUT_RATE,
     INPUT_COLUMNS,
     OUTPUT_COLUMNS,
     LSTM_HIDDEN_SIZE,
@@ -27,7 +28,7 @@ class LSTMNet(Module):
         hidden_size: int,
         num_layers: int,
         output_size: int,
-        dropout_p: float = 0.1,
+        dropout_p: float = DROPOUT_RATE,
     ):
         super(LSTMNet, self).__init__()
 

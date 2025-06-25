@@ -11,6 +11,7 @@ LSTM_SEQUENCE_LENGTH = 5  # Number of time steps to consider in LSTM
 
 # Training configuration
 LEARNING_RATE = 0.001
+DROPOUT_RATE = 0.2
 BATCH_SIZE = 64
 EPOCHS = 50
 VAL_SPLIT = 0.2

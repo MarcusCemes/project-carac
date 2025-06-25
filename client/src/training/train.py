@@ -19,6 +19,9 @@ OUTPUT_FEATURES = len(OUTPUT_COLUMNS)
 DEVICE = get_device("cuda" if cuda.is_available() else "cpu")
 print(f"Using device [b]{DEVICE}[/b]")
 
+PATIENCE = 5
+WEIGHT_DECAY = 1e-5
+
 
 @dataclass
 class TrainingResult:
@@ -32,12 +35,16 @@ def train_model(model: MLPNet | LSTMNet, dataset: Dataset[Batch]) -> TrainingRes
     model.to(DEVICE)
 
     criterion = MSELoss()
-    optimiser = Adam(model.parameters(), lr=LEARNING_RATE)
+    optimiser = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
     train_loader, val_loader = create_dataloaders(dataset)
 
     loss_history: list[float] = []
     val_loss_history: list[float] = []
+
+    patience_counter = 0
+    best_val_loss = float("inf")
+    best_model_state = None
 
     for epoch in track(
         range(EPOCHS),
@@ -72,6 +79,8 @@ def train_model(model: MLPNet | LSTMNet, dataset: Dataset[Batch]) -> TrainingRes
 
         line = f"  E{epoch+1:02d} | L: {avg_epoch_loss:.6f}"
 
+        avg_val_loss = None
+
         if val_loader:
             model.eval()
             val_losses = []
@@ -95,7 +104,23 @@ def train_model(model: MLPNet | LSTMNet, dataset: Dataset[Batch]) -> TrainingRes
             val_loss_history.append(avg_val_loss)
             line += f" | V: {avg_val_loss:.6f}"
 
+        if avg_val_loss is not None:
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                patience_counter = 0
+                best_model_state = model.state_dict()
+            else:
+                patience_counter += 1
+                line += f" [bright_black](patience {patience_counter}/{PATIENCE})[/]"
+
+            if patience_counter >= PATIENCE:
+                print(f"[b yellow]Early stop after {epoch + 1} epochs[/]")
+                break
+
         print(line)
+
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
 
     return TrainingResult(model, loss_history, val_loss_history)
 

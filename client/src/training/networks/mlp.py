@@ -1,8 +1,6 @@
 from torch.nn import Module, Linear, ReLU, Dropout, Sequential
-from training.defs import INPUT_COLUMNS, OUTPUT_COLUMNS, MLP_HIDDEN_LAYERS
 
-
-DROPOUT = 0.1
+from ..defs import DROPOUT_RATE, INPUT_COLUMNS, OUTPUT_COLUMNS, MLP_HIDDEN_LAYERS
 
 
 class MLPNet(Module):
@@ -24,7 +22,7 @@ class MLPNet(Module):
         input_size: int,
         output_size: int,
         hidden_sizes: list[int],
-        dropout_p: float = DROPOUT,
+        dropout_p: float = DROPOUT_RATE,
     ):
         super(MLPNet, self).__init__()
 

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from sys import argv
 
+import matplotlib
 from matplotlib import pyplot as plt
 from pandas import DataFrame
 from rich import print as rprint
@@ -19,6 +20,9 @@ from .defs import *
 from .networks.mlp import MLPNet
 from .networks.lstm import LSTMNet
 from .train import TrainingResult, train_model
+
+
+matplotlib.use("Agg")
 
 
 @dataclass
