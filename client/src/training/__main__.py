@@ -13,8 +13,8 @@ from torch.utils.data import Dataset
 from .datasets import (
     AxisDataset,
     Batch,
-    FreeFlight3Dataset,
-    FreeFlightExtended,
+    FreeFlightDataset,
+    FreeFlightExtendedDataset,
 )
 from .defs import *
 from .networks.mlp import MLPNet
@@ -24,12 +24,15 @@ from .train import TrainingResult, train_model
 
 matplotlib.use("Agg")
 
+TOPIC = "carac-training"
+
 
 @dataclass
 class TrainingJob:
     name: str
     model: MLPNet | LSTMNet
     dataset: Dataset[Batch]
+    validation: Dataset[Batch] | None = None
 
 
 def main():
@@ -38,22 +41,55 @@ def main():
         print_model(LSTMNet.default())
         exit(0)
 
+    if "multi" in argv:
+        train_multi()
+    else:
+        train_mlp_lstm()
+
+
+def train_mlp_lstm():
+    rprint("[b]Training MLP and LSTM models[/]")
+
     with Status("Loading datasets..."):
-        dataset_free_flight_baby = FreeFlight3Dataset()
-        dataset_free_flight_extended = FreeFlightExtended()
+        dataset_ff = FreeFlightDataset()
+        dataset_ff_ext = FreeFlightExtendedDataset()
         dataset_axis = AxisDataset()
 
-        dataset_free_flight = dataset_free_flight_baby + dataset_free_flight_extended
+        dataset_ff_complete = dataset_ff + dataset_ff_ext
+        dataset_ff_complete.__class__.__name__ = "FreeFlightCompleteDataset"
 
     jobs = [
-        TrainingJob("ff-all-mlp", MLPNet.default(), dataset_free_flight),
-        TrainingJob("ff-all-lstm", LSTMNet.default(), dataset_free_flight),
-        TrainingJob("ff-mlp", MLPNet.default(), dataset_free_flight_baby),
-        TrainingJob("ff-lstm", LSTMNet.default(), dataset_free_flight_baby),
+        TrainingJob("ff-all-mlp", MLPNet.default(), dataset_ff_complete),
+        TrainingJob("ff-all-lstm", LSTMNet.default(), dataset_ff_complete),
+        TrainingJob("ff-mlp", MLPNet.default(), dataset_ff),
+        TrainingJob("ff-lstm", LSTMNet.default(), dataset_ff),
         TrainingJob("axis-mlp", MLPNet.default(), dataset_axis),
         TrainingJob("axis-lstm", LSTMNet.default(), dataset_axis),
     ]
 
+    execute_jobs(jobs)
+
+
+def train_multi():
+    rprint("[b]Training MLP models with multiple layers[/]")
+
+    with Status("Loading datasets..."):
+        dataset_ff = FreeFlightDataset()
+        dataset_ff_ext = FreeFlightExtendedDataset()
+        dataset_axis = AxisDataset()
+
+        dataset_all = dataset_axis + dataset_ff + dataset_ff_ext
+        dataset_all.__class__.__name__ = "EntireDataset"
+
+    jobs = [
+        TrainingJob(f"mlp-{i}", MLPNet(size), dataset_all)
+        for i, size in enumerate(MLP_MULTI_LAYER_SIZES)
+    ]
+
+    execute_jobs(jobs)
+
+
+def execute_jobs(jobs: list[TrainingJob]):
     output_dir = OUTPUT_DIR / datetime.now().strftime("%y%m%d_%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +106,7 @@ def main():
 
     rprint("\n[green bold]Training complete![/green bold]")
     rprint(f"Saved to [b]{output_dir.relative_to(OUTPUT_DIR.parent)}[/]")
+    notify_complete()
 
 
 def print_model(model: MLPNet | LSTMNet):
@@ -96,6 +133,12 @@ def save_result(job: TrainingJob, result: TrainingResult, output_dir: Path) -> N
 
     plt.savefig(path.with_suffix(".png"))
     plt.close()
+
+
+def notify_complete():
+    from httpx import post
+
+    post(f"https://ntfy.sh/{TOPIC}", content="Training complete!")
 
 
 if __name__ == "__main__":

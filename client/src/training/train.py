@@ -30,14 +30,18 @@ class TrainingResult:
     val_loss_history: list[float] | None
 
 
-def train_model(model: MLPNet | LSTMNet, dataset: Dataset[Batch]) -> TrainingResult:
+def train_model(
+    model: MLPNet | LSTMNet,
+    dataset: Dataset[Batch],
+    validation: Dataset[Batch] | None = None,
+) -> TrainingResult:
     model_name = model.__class__.__name__
     model.to(DEVICE)
 
     criterion = MSELoss()
     optimiser = Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
-    train_loader, val_loader = create_dataloaders(dataset)
+    train_loader, val_loader = create_dataloaders(dataset, validation)
 
     loss_history: list[float] = []
     val_loss_history: list[float] = []
@@ -125,17 +129,24 @@ def train_model(model: MLPNet | LSTMNet, dataset: Dataset[Batch]) -> TrainingRes
     return TrainingResult(model, loss_history, val_loss_history)
 
 
-def create_dataloaders(dataset: Dataset[Batch]) -> tuple[DataLoader, DataLoader]:
+def create_dataloaders(
+    dataset: Dataset[Batch],
+    validation: Dataset[Batch] | None,
+) -> tuple[DataLoader, DataLoader]:
     """Creates a training a validation data loader using a chronological split."""
 
-    dataset_size = len(dataset)  # type: ignore[arg-type]
-    split_idx = int(dataset_size * (1 - VAL_SPLIT))
+    if validation is not None:
+        train_dataset = dataset
+        val_dataset = validation
+    else:
+        dataset_size = len(dataset)  # type: ignore[arg-type]
+        split_idx = int(dataset_size * (1 - VAL_SPLIT))
 
-    train_indices = list(range(split_idx))
-    val_indices = list(range(split_idx, dataset_size))
+        train_indices = list(range(split_idx))
+        val_indices = list(range(split_idx, dataset_size))
 
-    train_dataset = Subset(dataset, train_indices)
-    val_dataset = Subset(dataset, val_indices)
+        train_dataset = Subset(dataset, train_indices)
+        val_dataset = Subset(dataset, val_indices)
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)

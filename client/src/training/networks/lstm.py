@@ -24,10 +24,10 @@ class LSTMNet(Module):
 
     def __init__(
         self,
-        input_size: int,
         hidden_size: int,
         num_layers: int,
-        output_size: int,
+        input_size: int = len(INPUT_COLUMNS),
+        output_size: int = len(OUTPUT_COLUMNS),
         dropout_p: float = DROPOUT_RATE,
     ):
         super(LSTMNet, self).__init__()
@@ -73,9 +73,4 @@ class LSTMNet(Module):
 
     @staticmethod
     def default() -> "LSTMNet":
-        return LSTMNet(
-            input_size=len(INPUT_COLUMNS),
-            hidden_size=LSTM_HIDDEN_SIZE,
-            num_layers=LSTM_NUM_LAYERS,
-            output_size=len(OUTPUT_COLUMNS),
-        )
+        return LSTMNet(hidden_size=LSTM_HIDDEN_SIZE, num_layers=LSTM_NUM_LAYERS)

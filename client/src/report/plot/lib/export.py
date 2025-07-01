@@ -1,22 +1,31 @@
 from pathlib import Path
+from sys import argv
 
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 
-def save_figure_tikz(path: Path, fig: Figure | None = None, ax: Axes | None = None):
+def save_figure_tikz(
+    path: Path,
+    fig: Figure | None = None,
+    ax: Axes | None = None,
+    show_axes: bool = False,
+) -> None:
     if fig is None:
         fig = plt.gcf()
 
     if ax is None:
         ax = fig.gca()
 
-    ax.axis("off")
+    if not show_axes:
+        ax.axis("off")
+
+    suffix = ".eps" if "--pdf" not in argv else ".pdf"
 
     print("Saving TikZ figure to", path)
     fig.savefig(
-        path.with_suffix(".eps"),
+        path.with_suffix(suffix),
         bbox_inches="tight",
         pad_inches=0,
         transparent=True,

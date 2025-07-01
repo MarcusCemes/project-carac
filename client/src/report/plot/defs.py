@@ -14,6 +14,8 @@ PLOT_PATH = DATA_PATH / "plots"
 
 DPI_IMAGE = 600
 TIKZ_SIZE = (5, 3)
+TIKZ_SIZE_L = (8, 6)
+TIKZ_SIZE_XL = (12, 8)
 
 plt.rcParams["figure.figsize"] = (8, 6)
 plt.rcParams["figure.dpi"] = 100

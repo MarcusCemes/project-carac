@@ -19,9 +19,9 @@ class MLPNet(Module):
 
     def __init__(
         self,
-        input_size: int,
-        output_size: int,
         hidden_sizes: list[int],
+        input_size: int = len(INPUT_COLUMNS),
+        output_size: int = len(OUTPUT_COLUMNS),
         dropout_p: float = DROPOUT_RATE,
     ):
         super(MLPNet, self).__init__()
@@ -49,8 +49,4 @@ class MLPNet(Module):
 
     @staticmethod
     def default() -> "MLPNet":
-        return MLPNet(
-            len(INPUT_COLUMNS),
-            len(OUTPUT_COLUMNS),
-            MLP_HIDDEN_LAYERS,
-        )
+        return MLPNet(MLP_HIDDEN_LAYERS)
