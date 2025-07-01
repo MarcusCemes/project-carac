@@ -11,7 +11,7 @@ from pipeline.dataframe import Columns
 
 from .common import find_experiment
 from .defs import *
-from .lib.export import save_figure_tikz
+from .lib.export import save_figure_tikz, save_legend
 
 
 @dataclass
@@ -25,7 +25,7 @@ class Experiment:
 
 
 TITLE = "Lift & Drag Aerodynamic Forces"
-LABELS = ("Roll 2.0 rad/s", "Pitch/Roll 2.0 rad/s")
+LABELS = ("0.1 rad/s", "2 rad/s")
 
 PITCH_EXPERIMENT = Experiment(
     "pitch",
@@ -49,7 +49,8 @@ ROLL_EXPERIMENT = Experiment(
 )
 
 
-LEGENDS = False
+LEGENDS = True
+SAVE_LEGEND = False
 TITLE_SIZE = 16
 LINE_WIDTH = 1.5
 POINT_ALPHA = 0.8
@@ -70,9 +71,19 @@ COLOURS_2 = {
     "model_back": "#882255",
 }
 
+EXPORT_SIZE = (3, 3)
+
 
 def main():
-    for experiment in (PITCH_EXPERIMENT, YAW_EXPERIMENT, ROLL_EXPERIMENT):
+    if "grid" in argv:
+        plot_grid()
+        return
+
+    for experiment in (
+        PITCH_EXPERIMENT,
+        YAW_EXPERIMENT,
+        ROLL_EXPERIMENT,
+    ):
         [df1, df2] = map(pd.read_parquet, experiment.files)
 
         # Remove some annoying outliers
@@ -137,8 +148,8 @@ def main():
         ax2.grid(True, linestyle="--", alpha=0.6)
 
         if LEGENDS:
-            ax1.legend()
-            ax2.legend()
+            ax1.legend(markerscale=3)
+            ax2.legend(markerscale=3)
 
         plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
 
@@ -149,7 +160,9 @@ def main():
             plt.savefig((PLOT_PATH / name).with_suffix(".png"), dpi=DPI_IMAGE)
 
         if "--tikz" in argv:
-            fig_tikz_lift = plt.figure(figsize=TIKZ_SIZE)
+            is_sideslip = experiment.x_axis == Columns.AeroAngles[1]  # "beta"
+
+            fig_tikz_lift = plt.figure(figsize=EXPORT_SIZE)
             ax_tikz_lift = fig_tikz_lift.gca()
             ax_tikz_lift.set_ylim(-2.5, 2.5)
 
@@ -176,9 +189,9 @@ def main():
             save_figure_tikz((PLOT_PATH / f"{name}_lift"))
             plt.close(fig_tikz_lift)
 
-            fig_tikz_drag = plt.figure(figsize=TIKZ_SIZE)
+            fig_tikz_drag = plt.figure(figsize=EXPORT_SIZE)
             ax_tikz_drag = fig_tikz_drag.gca()
-            ax_tikz_drag.set_ylim(0.0, 3.0)
+            ax_tikz_drag.set_ylim(0.0, 2.5)
 
             plot_aero_force(
                 df1,
@@ -187,6 +200,7 @@ def main():
                 experiment.x_axis,
                 y_axis_col=Columns.AeroForces[0],
                 y_model_col=Columns.AeroForcesModel[0],
+                legend=is_sideslip,
                 ax=ax_tikz_drag,
             )
 
@@ -197,14 +211,180 @@ def main():
                 experiment.x_axis,
                 y_axis_col=Columns.AeroForces[0],
                 y_model_col=Columns.AeroForcesModel[0],
+                legend=is_sideslip,
                 ax=ax_tikz_drag,
             )
 
-            save_figure_tikz((PLOT_PATH / f"{name}_drag"))
+            if is_sideslip:
+                ax_tikz_drag.legend(markerscale=3)
 
+            save_figure_tikz((PLOT_PATH / f"{name}_drag"))
             plt.close(fig_tikz_drag)
 
-    plt.show()
+    if not "--save" in argv and not "--tikz" in argv:
+        plt.show()
+
+
+def plot_grid():
+
+    y_axis_col_1 = Columns.AeroForces[2]  # lift
+    y_axis_col_2 = Columns.AeroForces[0]  # drag
+
+    y_axis_col_1_model = f"{y_axis_col_1}_model"
+    y_axis_col_2_model = f"{y_axis_col_2}_model"
+
+    _, axs = plt.subplots(1, 2, figsize=(12, 6))
+
+    [df1, df2] = map(pd.read_parquet, PITCH_EXPERIMENT.files)
+
+    ax1, ax2 = axs
+
+    plot_aero_force(
+        df1,
+        LABELS[0],
+        COLOURS_1,
+        PITCH_EXPERIMENT.x_axis,
+        y_axis_col=y_axis_col_1,
+        y_model_col=y_axis_col_1_model,
+        ax=ax1,
+    )
+
+    plot_aero_force(
+        df2,
+        LABELS[1],
+        COLOURS_2,
+        PITCH_EXPERIMENT.x_axis,
+        y_axis_col=y_axis_col_1,
+        y_model_col=y_axis_col_1_model,
+        ax=ax1,
+    )
+
+    plot_aero_force(
+        df1,
+        LABELS[0],
+        COLOURS_1,
+        PITCH_EXPERIMENT.x_axis,
+        y_axis_col=y_axis_col_2,
+        y_model_col=y_axis_col_2_model,
+        ax=ax2,
+    )
+
+    plot_aero_force(
+        df2,
+        LABELS[1],
+        COLOURS_2,
+        PITCH_EXPERIMENT.x_axis,
+        y_axis_col=y_axis_col_2,
+        y_model_col=y_axis_col_2_model,
+        ax=ax2,
+    )
+
+    ax1.set_ylabel(PITCH_EXPERIMENT.y_label or "Lift [N]")
+    ax2.set_ylabel(PITCH_EXPERIMENT.y_label or "Drag [N]")
+
+    ax1.set_xlabel(f"{PITCH_EXPERIMENT.x_label} [°]")
+    ax2.set_xlabel(f"{PITCH_EXPERIMENT.x_label} [°]")
+
+    # ax1.grid(True, linestyle="--", alpha=0.6)
+    # ax2.grid(True, linestyle="--", alpha=0.6)
+
+    ax1.set_ylim(-3.0, 3.0)
+    ax2.set_ylim(0.0, 3.0)
+
+    if SAVE_LEGEND:
+        save_legend(
+            ax1,
+            PLOT_PATH / "aero_legend.svg",
+            ncol=2,
+            markerscale=3,
+        )
+
+    ax1.legend().remove()
+    ax2.legend().remove()
+
+    # plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+
+    name = "aero_attack.svg"
+    PLOT_PATH.mkdir(parents=True, exist_ok=True)
+    plt.savefig((PLOT_PATH / name), dpi=DPI_IMAGE, transparent=True)
+
+    _, axs = plt.subplots(2, 2, figsize=(12, 6))
+
+    for i, experiment in enumerate([YAW_EXPERIMENT, ROLL_EXPERIMENT]):
+        [df1, df2] = map(pd.read_parquet, experiment.files)
+
+        # Remove some annoying outliers
+        if experiment.x_axis == Columns.AeroAngles[1]:  # "beta"
+            df2 = df2[df2[Columns.AeroAngles[1]] <= 0.2616].copy()
+
+        ax1 = axs[0, i]
+        ax2 = axs[1, i]
+
+        plot_aero_force(
+            df1,
+            LABELS[0],
+            COLOURS_1,
+            experiment.x_axis,
+            y_axis_col=y_axis_col_1,
+            y_model_col=y_axis_col_1_model,
+            ax=ax1,
+        )
+
+        plot_aero_force(
+            df2,
+            LABELS[1],
+            COLOURS_2,
+            experiment.x_axis,
+            y_axis_col=y_axis_col_1,
+            y_model_col=y_axis_col_1_model,
+            ax=ax1,
+        )
+
+        plot_aero_force(
+            df1,
+            LABELS[0],
+            COLOURS_1,
+            experiment.x_axis,
+            y_axis_col=y_axis_col_2,
+            y_model_col=y_axis_col_2_model,
+            ax=ax2,
+        )
+
+        plot_aero_force(
+            df2,
+            LABELS[1],
+            COLOURS_2,
+            experiment.x_axis,
+            y_axis_col=y_axis_col_2,
+            y_model_col=y_axis_col_2_model,
+            ax=ax2,
+        )
+
+        if i == 0:
+            ax1.set_ylabel(experiment.y_label or "Lift [N]")
+            ax2.set_ylabel(experiment.y_label or "Drag [N]")
+        else:
+            ax1.set_ylabel("")
+            ax2.set_ylabel("")
+
+        ax1.set_xlabel("")
+        ax2.set_xlabel(f"{experiment.x_label} [°]")
+
+        # ax1.grid(True, linestyle="--", alpha=0.6)
+        # ax2.grid(True, linestyle="--", alpha=0.6)
+
+        ax1.set_ylim(-0.4, 0.2)
+        ax2.set_ylim(0.0, 0.35)
+
+    for ax in axs.flat:
+        ax.legend().remove()
+
+    # plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+
+    name = "aero_side_roll.svg"
+    PLOT_PATH.mkdir(parents=True, exist_ok=True)
+
+    plt.savefig((PLOT_PATH / name), dpi=DPI_IMAGE, transparent=True)
 
 
 def plot_aero_force(
@@ -215,6 +395,7 @@ def plot_aero_force(
     y_axis_col: str,
     y_model_col: str,
     *,
+    legend: bool = LEGENDS,
     ax: Axes,
 ):
     x_deg_col = f"{x_axis_col}_deg"
@@ -231,9 +412,9 @@ def plot_aero_force(
         color=colors["forward"],
         s=POINT_SIZE,
         alpha=POINT_ALPHA,
-        label=f"{name} (F)",
+        label=f"{name} (PU)",
         ax=ax,
-        legend=LEGENDS,
+        legend=legend,
     )
 
     df_b.plot(
@@ -243,9 +424,9 @@ def plot_aero_force(
         color=colors["back"],
         s=POINT_SIZE,
         alpha=POINT_ALPHA,
-        label=f"{name} (B)",
+        label=f"{name} (PD)",
         ax=ax,
-        legend=LEGENDS,
+        legend=legend,
     )
 
     df_f_sorted = df_f.sort_values(by=x_deg_col)
@@ -257,9 +438,9 @@ def plot_aero_force(
         y=y_model_col,
         color=colors["model_fwd"],
         linewidth=LINE_WIDTH,
-        label=f"Model {name} (F)",
+        label=f"{name} (PU) Model",
         ax=ax,
-        legend=LEGENDS,
+        legend=legend,
     )
 
     df_b_sorted.plot(
@@ -268,9 +449,9 @@ def plot_aero_force(
         y=y_model_col,
         color=colors["model_back"],
         linewidth=LINE_WIDTH,
-        label=f"Model {name} (B)",
+        label=f"{name} (PD) Model",
         ax=ax,
-        legend=LEGENDS,
+        legend=legend,
     )
 
 

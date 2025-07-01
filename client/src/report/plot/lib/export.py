@@ -4,6 +4,41 @@ from sys import argv
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.legend import Legend
+import numpy as np
+
+
+# def save_legend(legend: Legend, path: Path, expand=[-5, -5, 5, 5]):
+#     fig = legend.figure
+#     fig.canvas.draw()
+
+#     bbox = legend.get_window_extent()
+#     bbox = bbox.from_extents(*(bbox.extents + np.array(expand)))
+#     bbox = bbox.transformed(fig.dpi_scale_trans.inverted())
+
+#     fig.savefig(  # type: ignore
+#         path,
+#         dpi="figure",
+#         bbox_inches=bbox,
+#         transparent=True,
+#     )
+
+
+def save_legend(ax: Axes, path: Path, **kwargs):
+    handles, labels = ax.get_legend_handles_labels()
+
+    legend_fig, legend_ax = plt.subplots(figsize=(6, 1))
+    legend_ax.axis("off")
+    legend_ax.legend(handles, labels, loc="center", **kwargs)
+
+    legend_fig.savefig(
+        path,
+        bbox_inches="tight",
+        dpi="figure",
+        facecolor="white",
+        edgecolor="none",
+        transparent=True,
+    )
 
 
 def save_figure_tikz(
@@ -21,7 +56,7 @@ def save_figure_tikz(
     if not show_axes:
         ax.axis("off")
 
-    suffix = ".eps" if "--pdf" not in argv else ".pdf"
+    suffix = ".pdf" if "--pdf" in argv else ".svg" if "--svg" in argv else ".eps"
 
     print("Saving TikZ figure to", path)
     fig.savefig(

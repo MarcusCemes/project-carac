@@ -18,8 +18,8 @@ class Opts:
 
 # FILE = find_experiment("axis-uncoupled", 13)
 # FILE = find_experiment("plunge", 14)
-# FILE = find_experiment("attack-rotations", 28)  # roll
-FILE = find_experiment("attack-rotations", 31)  # yaw
+FILE = find_experiment("attack-rotations", 28)  # roll
+# FILE = find_experiment("attack-rotations", 31)  # yaw
 df = pd.read_parquet(FILE)
 
 

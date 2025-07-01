@@ -19,7 +19,8 @@ class Opts:
 # FILE = find_experiment("axis-uncoupled", 13)
 # FILE = find_experiment("plunge", 14)
 # FILE = find_experiment("attack-rotations", 28)
-FILE = find_experiment("attack-rotations", 24)
+# FILE = find_experiment("attack-rotations", 24)
+FILE = find_experiment("axis-uncoupled", 16)
 
 OPTS: list[Opts] = [
     Opts(
@@ -50,10 +51,11 @@ def main():
 
 def plot_model(df: pd.DataFrame):
     for opts in OPTS:
-        _, axs = plt.subplots(1, 2)
+        _, axs = plt.subplots(1, 3)
 
         df.plot(**asdict(opts), y=Columns.AeroForcesModel, ax=axs[0])
         df.plot(**asdict(opts), y=Columns.BodyForceModel, ax=axs[1])
+        df.plot(**asdict(opts), y=Columns.BodyMomentModel, ax=axs[2])
 
         plt.title(f"Aerodynamic Forces Model ({opts.xlabel})")
         plt.tight_layout()

@@ -6,6 +6,8 @@ from pathlib import Path
 ANALYTICAL_MODELLING = True
 
 USE_POOL: bool = True
+# FILTER: list[str] = ["0016", "0017", "0024", "0026"]
+# FILTER: list[str] = ["0024"]
 FILTER: list[str] = []
 
 

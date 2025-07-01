@@ -60,7 +60,7 @@ YAW_EXPERIMENT = Experiment(
 )
 
 
-LEGENDS = False
+LEGENDS = True
 TITLE_SIZE = 16
 LINE_WIDTH = 1.5
 POINT_ALPHA = 0.8
@@ -81,8 +81,14 @@ COLOURS_2 = {
     "model_back": "#882255",
 }
 
+EXPORT_SIZE = (5, 2)
+
 
 def main():
+    if "grid" in argv:
+        plot_grid()
+        return
+
     for experiment in (ROLL_EXPERIMENT, YAW_EXPERIMENT):
         [df1, df2] = map(pd.read_parquet, experiment.files)
 
@@ -160,9 +166,9 @@ def main():
             plt.savefig((PLOT_PATH / name).with_suffix(".png"), dpi=DPI_IMAGE)
 
         if "--tikz" in argv:
-            fig_tikz_lift = plt.figure(figsize=TIKZ_SIZE)
+            fig_tikz_lift = plt.figure(figsize=EXPORT_SIZE)
             ax_tikz_lift = fig_tikz_lift.gca()
-            ax_tikz_lift.set_ylim(-2.5, 2.5)
+            ax_tikz_lift.set_ylim(1, 2)
 
             plot_aero_force(
                 df1,
@@ -187,9 +193,9 @@ def main():
             save_figure_tikz((PLOT_PATH / f"{name}_lift"))
             plt.close(fig_tikz_lift)
 
-            fig_tikz_drag = plt.figure(figsize=TIKZ_SIZE)
+            fig_tikz_drag = plt.figure(figsize=EXPORT_SIZE)
             ax_tikz_drag = fig_tikz_drag.gca()
-            ax_tikz_drag.set_ylim(0.0, 3.0)
+            ax_tikz_drag.set_ylim(0.5, 1.5)
 
             plot_aero_force(
                 df1,
@@ -217,6 +223,76 @@ def main():
 
     if "--tikz" not in argv and "--save" not in argv:
         plt.show()
+
+
+def plot_grid():
+    _, axs = plt.subplots(2, 2, figsize=(12, 6))
+
+    for i, experiment in enumerate([YAW_EXPERIMENT, ROLL_EXPERIMENT]):
+        [df1, df2] = map(pd.read_parquet, experiment.files)
+
+        plot_aero_force(
+            df1,
+            LABELS[0],
+            COLOURS_1,
+            experiment.x_axis,
+            y_axis_col=Columns.AeroForces[2],
+            y_model_col=Columns.AeroForcesModel[2],
+            ax=axs[0, i],
+        )
+
+        plot_aero_force(
+            df2,
+            LABELS[1],
+            COLOURS_2,
+            experiment.x_axis,
+            y_axis_col=Columns.AeroForces[2],
+            y_model_col=Columns.AeroForcesModel[2],
+            ax=axs[0, i],
+        )
+
+        plot_aero_force(
+            df1,
+            LABELS[0],
+            COLOURS_1,
+            experiment.x_axis,
+            y_axis_col=Columns.AeroForces[0],
+            y_model_col=Columns.AeroForcesModel[0],
+            ax=axs[1, i],
+        )
+
+        plot_aero_force(
+            df2,
+            LABELS[1],
+            COLOURS_2,
+            experiment.x_axis,
+            y_axis_col=Columns.AeroForces[0],
+            y_model_col=Columns.AeroForcesModel[0],
+            ax=axs[1, i],
+        )
+
+        axs[0, i].set_ylim(1.2, 2)
+        axs[1, i].set_ylim(0.7, 1.5)
+
+        if i == 0:
+            axs[0, i].set_ylabel("Lift [N]")
+            axs[1, i].set_ylabel("Drag [N]")
+        else:
+            axs[0, i].set_ylabel("")
+            axs[1, i].set_ylabel("")
+
+        axs[0, i].set_xlabel("")
+        axs[1, i].set_xlabel(f"{experiment.x_label} [°]")
+
+    for ax in axs.flat:
+        ax.legend().remove()
+
+    # axs[1, 1].legend(ncols=2, markerscale=3)
+
+    name = "attack.svg"
+    PLOT_PATH.mkdir(parents=True, exist_ok=True)
+
+    plt.savefig((PLOT_PATH / name), dpi=DPI_IMAGE, transparent=True)
 
 
 def plot_aero_force(

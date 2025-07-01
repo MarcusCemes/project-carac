@@ -10,8 +10,11 @@ from .defs import *
 from .lib.export import save_figure_tikz
 
 
-INPUT_1 = INPUT_PATH / "0001_high_samples.parquet"
-INPUT_2 = INPUT_PATH / "0002_high_samples.parquet"
+# INPUT_1 = INPUT_PATH / "0001_high_samples.parquet"
+# INPUT_2 = INPUT_PATH / "0002_high_samples.parquet"
+
+INPUT_1 = INPUT_PATH / "0001_high_samples_10.parquet"
+INPUT_2 = INPUT_PATH / "0002_high_samples_10.parquet"
 
 COL_X = "time"
 COL_Y = "fx"
@@ -186,8 +189,11 @@ def plot_results(df1: pd.DataFrame, df2: pd.DataFrame):
     df1[idx1].plot.line(x=COL_X, y=COL_Y, ax=ax, c="#ee6677", linewidth=LINE_WIDTH)
     df2[idx2].plot.line(x=COL_X, y=COL_Y, ax=ax, c="#4477aa", linewidth=LINE_WIDTH)
 
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Force X [N]")
+    ax.legend().remove()
+
     if "--tikz" in argv:
-        ax.legend().remove()
         save_figure_tikz(OUTPUT_PATH)
         plt.close(fig)
 

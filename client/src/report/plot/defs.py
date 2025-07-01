@@ -25,3 +25,15 @@ plt.rcParams["scatter.edgecolors"] = "none"
 class PlotOpts(TypedDict, total=False):
     x: str
     xlabel: str
+
+
+CONTEXT: list[str] = []
+
+try:
+    import scienceplots
+
+    del scienceplots
+    CONTEXT.append("science")
+
+except ImportError:
+    pass
