@@ -4,24 +4,6 @@ from sys import argv
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.legend import Legend
-import numpy as np
-
-
-# def save_legend(legend: Legend, path: Path, expand=[-5, -5, 5, 5]):
-#     fig = legend.figure
-#     fig.canvas.draw()
-
-#     bbox = legend.get_window_extent()
-#     bbox = bbox.from_extents(*(bbox.extents + np.array(expand)))
-#     bbox = bbox.transformed(fig.dpi_scale_trans.inverted())
-
-#     fig.savefig(  # type: ignore
-#         path,
-#         dpi="figure",
-#         bbox_inches=bbox,
-#         transparent=True,
-#     )
 
 
 def save_legend(ax: Axes, path: Path, **kwargs):

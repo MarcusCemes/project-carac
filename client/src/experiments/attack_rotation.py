@@ -101,8 +101,6 @@ async def init(o: Orchestrator):
             [
                 Robot(SetConfig(Configs.Free)),
                 Robot(SetBlending(Blends.Medium)),
-                # Robot(SetToolOffset(Point())),
-                # Robot(Move(MotionLinear(Points.Base.add(Point(x=300))))),
                 Robot(SetToolOffset(Offsets.Drone)),
                 Robot(SetBlending(Blends.Zero)),
                 Robot(Move(MotionDirect(WORK_POINT))),

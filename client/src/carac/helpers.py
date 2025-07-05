@@ -1,4 +1,4 @@
-from math import acos, asin, atan2, cos, sin
+from math import acos, cos, sin
 
 from .instructions import *
 
@@ -24,38 +24,6 @@ def deg_to_rad(deg: float) -> float:
 
 def rad_to_deg(rad: float) -> float:
     return rad * (180.0 / 3.141592653589793)
-
-
-def quat_to_euler(quat: Vec4) -> Vec3:
-    """
-    Convert quaternion to Euler angles using XYZ order (roll-pitch-yaw).
-    This corresponds to rotations applied in order: X(roll), then Y(pitch), then Z(yaw).
-
-    Args:
-        quat: (qx, qy, qz, qw) quaternion
-
-    Returns:
-        (rx, ry, rz) Euler angles in radians - roll(X), pitch(Y), yaw(Z)
-    """
-    qx, qy, qz, qw = quat
-
-    # Roll (X-axis rotation)
-    sinr_cosp = 2 * (qw * qx + qy * qz)
-    cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-    roll = atan2(sinr_cosp, cosr_cosp)
-
-    # Pitch (Y-axis rotation)
-    sinp = 2 * (qw * qy - qz * qx)
-    # Clamp sinp to avoid numerical issues with asin
-    sinp = max(-1.0, min(1.0, sinp))
-    pitch = asin(sinp)
-
-    # Yaw (Z-axis rotation)
-    siny_cosp = 2 * (qw * qz + qx * qy)
-    cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
-    yaw = atan2(siny_cosp, cosy_cosp)
-
-    return (roll, pitch, yaw)
 
 
 def euler_xyz_intrinsic_to_quat(angles: Vec3) -> Vec4:

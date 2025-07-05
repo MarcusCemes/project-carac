@@ -96,9 +96,6 @@ def main():
         save_figure_tikz(PLOT_PATH / "network_complexity")
         plt.close()
 
-    # if not "--tikz" in argv:
-    #     plt.show()
-
     plt.figure(figsize=(7, 3))
     ax = plt.gca()
     plot_models(df, "lift", models, ax=ax)
@@ -109,7 +106,6 @@ def main():
     ax.set_ylim(-2.5, 2.8)
     ax.legend(ncol=4, prop={"size": 8})
     plt.subplots_adjust(bottom=0.25)
-    # plt.tight_layout()
 
     plt.savefig(
         PLOT_PATH / "network_complexity.svg",

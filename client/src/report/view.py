@@ -28,7 +28,6 @@ df = pd.read_parquet(path)
 
 df[Columns.WorldRotation] = np.rad2deg(df[Columns.WorldRotation])
 df[Columns.AeroAngles] = np.rad2deg(df[Columns.AeroAngles])
-# df[MOCAP_COLS] = np.rad2deg(df[MOCAP_COLS])
 
 fig, axs = plt.subplots(3, 2)
 

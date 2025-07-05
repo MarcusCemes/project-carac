@@ -53,9 +53,6 @@ PARAMETERS_2 = [
 
 PARAMETERS_3 = [
     Parameter("uvw", r"$\lVert\textbf{v}_w\rVert$"),
-    # Parameter("uvw", r"$v_w$"),
-    # Parameter("v", r"$v$"),
-    # Parameter("w", r"$w$"),
 ]
 
 
@@ -90,7 +87,7 @@ def main():
     with Status("Generating plots"):
         matplotlib.rc("text", usetex=True)
         matplotlib.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
-        # plt.style.use(CONTEXT)
+        plt.style.use(CONTEXT)
         plt.figure(figsize=(5, 3))
         gs = GridSpec(3, 1, height_ratios=[2, 3, 1])
 
@@ -104,16 +101,9 @@ def main():
 
         for ax in [ax1, ax2, ax3]:
             ax.set_xlabel("")
-        # ax.tick_params(axis="y", length=0)
-        # sns.despine(ax=ax, left=True, bottom=False)
 
         plt.tight_layout()
-        # plt.subplots_adjust(hspace=0.25)
         plt.subplots_adjust(hspace=0.35)
-
-        # ax1.set_ylabel("[degrees]")
-        # ax2.set_ylabel("[degrees/s]")
-        # ax3.set_ylabel("[m/s]")
 
         for ax in [ax1, ax2, ax3]:
             ax.set_ylabel("")

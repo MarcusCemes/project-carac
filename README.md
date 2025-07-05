@@ -1,14 +1,49 @@
-# Project CARAC
+<div align="center">
+  <br />
+  <img width="300" src="./assets/logo.svg">
+  <br />
+  <br />
+  <br />
+</div>
 
-**Automation Platform for Aerodynamic Drone Characterization**
+A comprehensive automation platform for conducting aerodynamic experiments on morphing drones under controlled windy conditions. This project was developed as part of a Master's thesis at [École Polytechnique Fédérale de Lausanne (EPFL)](https://www.epfl.ch) by Marcus Cemes (July 2025).
 
-A comprehensive automation platform for conducting aerodynamic experiments on morphing drones under controlled windy conditions. This project was developed as part of a Master's thesis at EPFL by Marcus Cemes.
+<div align="center">
+  <br />
+  <a href="./assets/Automation Platform for Aerodynamic Drone Characterization.pdf">
+    <img src="./assets/cover-page.jpg" alt="Thesis" width="150">
+    <br />
+    <strong>Read the paper »</strong>
+  </a>
+</div>
 
-## Overview
+## Table of Contents
 
-Project CARAC integrates multiple hardware systems into a fully automated experimental environment. Built on a client-server architecture, it orchestrates complex experiments involving robotic manipulation, precision force measurement, controlled wind generation, and high-precision motion tracking.
-
-The **Server** (`carac.exe`), written in Rust, provides the core orchestration and data acquisition engine. The **Client** is a suite of Python packages for experiment design, execution, data processing, and analysis.
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+  - [Server (Rust Backend)](#server-rust-backend)
+  - [Client (Python Frontend)](#client-python-frontend)
+- [Hardware Support](#hardware-support)
+  - [Primary Hardware](#primary-hardware)
+  - [Custom UDP Devices](#custom-udp-devices)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Configuration](#configuration)
+- [Usage](#usage)
+  - [1. Running the Server](#1-running-the-server)
+  - [2. Running Experiments](#2-running-experiments)
+  - [3. Processing Data](#3-processing-data)
+  - [4. Training Models](#4-training-models)
+- [Command-Line Tools](#command-line-tools)
+  - [`carac` (Server & Measurement)](#carac-server--measurement)
+  - [`carac-kit` (Data Utilities)](#carac-kit-data-utilities)
+- [Client Library (`carac` package)](#client-library-carac-package)
+  - [Orchestrator](#orchestrator)
+  - [Instructions](#instructions)
+  - [Example Experiment Script](#example-experiment-script)
+- [Data Format & Session Structure](#data-format--session-structure)
+- [Project Structure](#project-structure)
 
 ## Key Features
 
@@ -29,35 +64,49 @@ Project CARAC is split into two main components: a Rust server and a Python clie
 
 ### Server (Rust Backend)
 
-The server is the central hub that runs on a dedicated machine connected to the hardware. It consists of:
+The server is the central hub that runs on a dedicated machine connected to the hardware. Built on the [Tokio](https://tokio.rs/) asynchronous runtime in Rust, it provides deterministic, high-performance control and data acquisition without the overhead of a garbage collector.
 
-- **Orchestration Engine**: Manages hardware, executes instruction sequences, and handles experiment state.
-- **DataSink System**: Collects timestamped data into efficient in-memory buffers.
-- **Hardware Contexts**: Abstracted, asynchronous interfaces for each piece of hardware.
-- **HTTP & UDP APIs**: Exposes control endpoints for the Python client and generic devices.
+- **Orchestration Engine**: The core of the server, it receives a sequence of `Instruction`s from the client and executes them in order. It manages the overall state of the experiment.
+- **Hardware Abstraction**: Each piece of hardware is managed by a dedicated, asynchronous `HardwareAgent`. This modular design allows for concurrent operation and easy extension.
+- **DataSink System**: A central component for data collection. Each hardware agent registers data `Stream`s (e.g., `load_cell`, `robot_arm`) and receives a `StreamWriter` handle. This allows agents to write timestamped data to dedicated, non-blocking memory buffers. The system uses a two-level locking strategy to ensure high-throughput, concurrent writes without data loss.
+- **Custom UDP Protocols**: Communication with the Stäubli Robot Arm and other custom hardware is handled through efficient, custom binary UDP protocols.
+- **HTTP API**: A simple HTTP server built with [Axum](https://github.com/tokio-rs/axum) exposes control endpoints for the Python client.
 
 ### Client (Python Frontend)
 
 The client is a collection of Python packages used to interact with the server and process the resulting data.
 
 - **`carac`**: An SDK providing an `Orchestrator` client to communicate with the server's HTTP API. It includes definitions, helpers, and constants for scripting experiments.
-- **`experiments`**: A set of runnable Python modules that define specific experimental procedures (e.g., `python -m experiments.coupled_axis`).
-- **`pipeline`**: Scripts for post-processing recorded data, such as applying force corrections or analytical models.
+- **`experiments`**: A set of runnable Python modules that define specific experimental procedures (e.g., `python -m experiments.free_flight`).
+- **`pipeline`**: Scripts for post-processing recorded data, such as applying force corrections, filtering, and running analytical models.
 - **`report`**: Code for generating plots, figures, and summaries from processed data.
-- **`training`**: Tools for applying machine learning models to the collected datasets.
+- **`training`**: A PyTorch-based framework for training machine learning models (MLP, LSTM) on the collected datasets.
 
 ## Hardware Support
 
-### Primary Hardware Components
+### Primary Hardware
 
-- **Stäubli TX2-90 Robot Arm**: 6-DOF industrial robot for precise drone positioning.
+- **Stäubli TX2-90 Robot Arm**: 6-DOF industrial robot for precise drone positioning. Requires the `RemoteControl` VAL3 program to be loaded onto the CS9 controller.
 - **ATI NANO25-E Load Cell**: High-precision force/torque sensor for aerodynamic measurements.
 - **WindShape Wind Generator**: Controlled wind generation system.
 - **OptiTrack Motion Capture**: Sub-millimetre precision tracking for position and orientation.
 
-### Additional Hardware Support
+### Custom UDP Devices
 
-The platform supports custom hardware devices through a generic UDP-based protocol for bidirectional command and state communication.
+The platform is designed to be extensible and can support any custom hardware that communicates over UDP.
+
+#### Designing a UDP Device
+
+A custom device must implement a UDP server that listens for commands from the CARAC server. The protocol is a simple binary format:
+
+- **Packet Format**: `[MAGIC_BYTE (0xDE), CHANNEL_COUNT (u8), PAYLOAD (N * f32)]`
+- The `PAYLOAD` consists of `CHANNEL_COUNT` floating-point values, sent in little-endian byte order.
+
+The device can also send data back to the CARAC server using the same format. The server will listen for these packets and record them into the corresponding data stream.
+
+#### Drone Relay Example
+
+The `support/drone_relay` directory provides an example of a Python-based UDP relay. It acts as a bridge between the CARAC server and a device with a different communication protocol (in this case, a drone's flight controller). It receives the standard CARAC `Device` instruction, translates the float values into the ASCII format expected by the drone, and forwards the message. This is a useful pattern for integrating off-the-shelf hardware.
 
 ## Getting Started
 
@@ -65,174 +114,244 @@ The platform supports custom hardware devices through a generic UDP-based protoc
 
 - Rust (latest stable version)
 - Python 3.10+
-- Hardware systems configured and connected to the network.
+- **Stäubli Robotics Suite**: Required to load the VAL3 program onto the robot controller.
+- All hardware systems configured and connected to the network.
 
-### Server Installation (Rust)
+### Installation
 
-The server provides two binaries: `carac.exe` for orchestration and `carac-kit.exe` for utilities.
+#### 1. Robot Arm Controller Setup
+
+The `support/remote-control` directory contains a **VAL3 project** that must be loaded onto the Stäubli CS9 robot controller. Use the Stäubli Robotics Suite to transfer and run the `RemoteControl` application. This program runs the UDP server on the controller that listens for commands from the CARAC server.
+
+#### 2. Server Installation (Rust)
+
+The server provides two binaries: `carac` for orchestration and `carac-kit` for utilities.
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd project-carac/server
+cd server
 
 # Build the binaries
 cargo build --release
 ```
 
-### Client Installation (Python)
+The binaries will be available in `server/target/release/`.
+
+#### 3. Client Installation (Python)
 
 The client is structured as a Python project with multiple packages.
 
 ```bash
-cd ../client
+cd client
 
-# Install the project in editable mode with all dependencies (managed by pyproject.toml)
+# Create and activate a virtual environment
+python -m venv .venv
+./.venv/bin/activate
+
+# On Windows, use:
+# .\.venv\Scripts\activate
+
+# Install the project in editable mode with all dependencies
 pip install -e .
 ```
 
 ### Configuration
 
-Create a `config.yaml` file to specify your hardware setup. The server will load this file on startup.
+The server is configured using a `config.yaml` file. The server loads this file on startup from the current working directory, or from a path specified with the `--config` flag.
 
 ```yaml
+# Main hardware configuration block
 hardware:
+  # Stäubli TX2-90 Robot Arm settings
   robot_arm:
-    ip: "192.168.1.100"
-    port: 20000
+    ip: "192.168.1.100" # IP address of the robot controller
+    port: 20000          # Port for the robot controller
 
-load_cell:
-    ip: "192.168.1.101"
-    configure_device: true
+  # ATI Nano25-E Load Cell settings
+  load_cell:
+    ip: "192.168.1.101" # IP address of the Net F/T box
+    configure_device: true # Whether to apply standard configuration on startup
+    buffered_streaming: true # Use buffered streaming for higher data rates
 
-motion_capture:
-    ip: "192.168.1.102"
-    rigid_bodies: ["drone"]
+  # OptiTrack Motion Capture settings
+  motion_capture:
+    ip: "192.168.1.102" # IP of the machine running Motive
+    multicast_ip: "239.255.42.99" # Multicast address for data streaming
+    rigid_bodies: ["drone"] # List of rigid body names to track
 
+  # WindShape Wind Generator settings
   wind_shape:
-    ip: "192.168.1.103"
+    ip: "192.168.1.103" # IP address of the WindShape controller
 
+  # Configuration for additional generic UDP devices
   additional_devices:
-    - name: "drone"
-      ip: "192.168.1.200"
-      port: 21000
+    - name: "drone" # Unique name for the device
+      ip: "192.168.1.200" # IP address of the device
+      port: 21000 # Port for the device
       channels: ["throttle", "sweep_l", "sweep_r", "servo_1", "servo_2"]
 
+# Data sink configuration
 sink:
-  session_path: "./data"
+  session_path: "."/data"
+  # Optional: Enable real-time data broadcasting to PlotJuggler
+  plot_juggler:
+    ip: "127.0.0.1"
+    port: 9870
 ```
 
-## Running an Experiment (Example Workflow)
+## Usage
 
-1.  **Start the orchestration server:**
+### 1. Running the Server
 
-    ```bash
-    # From the server directory, with optional config path (default is working directory)
-    .\\target\\release\\carac.exe --config path/to/config.yaml
-    ```
+Start the orchestration server from the `server` directory.
 
-2.  **Execute an experiment script from the client:**
+```bash
+# From the server directory
+./target/release/carac --config path/to/config.yaml
+```
 
-    ```bash
-    # From the client directory
-    python -m experiments.coupled_axis
-    ```
+The server will initialize all hardware specified in the configuration file and wait for commands from a client.
 
-3.  **Process and analyze the data:**
-    Data is saved in the `session_path` defined in your config. Use `carac-kit.exe` to export it.
+### 2. Running Experiments
 
-    ```bash
-    # From the /server directory
-    .\\target\\release\\carac-kit.exe export --format parquet .\\data
+Experiments are defined as Python scripts in `client/src/experiments`. They can be executed as Python modules from the `client` directory.
 
-    # View available options
-    .\\target\\release\\carac-kit.exe export --help
-    ```
+```bash
+# From the client directory
+python -m experiments.free_flight
+```
+
+### 3. Processing Data
+
+The `pipeline` package processes the raw binary data into analysis-ready Parquet files. It applies corrections, computes derived quantities (e.g., aerodynamic forces), and runs analytical models.
+
+```bash
+# From the client directory
+python -m pipeline
+```
+
+The pipeline's behavior is configured in `client/src/pipeline/config.py`. Processed data is saved to `data/processed`.
+
+### 4. Training Models
+
+The `training` package provides a framework for training ML models on the processed data.
+
+```bash
+# From the client directory
+python -m training
+```
+
+This will load the datasets, define the neural networks (MLP, LSTM), and start training. Models and logs are saved to `data/checkpoints`. Network architectures and training parameters are configured in `client/src/training/defs.py`.
 
 ## Command-Line Tools
 
-### `carac.exe` (Server & Measurement)
+### `carac` (Server & Measurement)
 
-- `carac (server) --config <path>`: (Default) Starts the orchestration server.
-- `carac measure --config <path>`: Initiates a guided procedure to measure the mass and center of mass of the attached payload.
+- `carac server --config <path>`: (Default) Starts the orchestration server.
+- `carac measure --config <path>`: Initiates a guided procedure to measure the mass and center of mass of an attached payload.
 
-### `carac-kit.exe` (Data Utilities)
+### `carac-kit` (Data Utilities)
 
-- `carac-kit export --format <csv|parquet> <session>`: Exports a session to CSV/Parquet
-- `carac-kit view <experiment>`: Inspects the header and stream information of a binary recording file.
-- `carac-kit plot <session>`: Generates stream/channel plots for an entire session
+- `carac-kit export --format <csv|parquet> <session_path>`: Exports a session's data.
+- `carac-kit view <experiment_path>`: Inspects the header and stream information of a binary recording file.
+- `carac-kit plot <session_path>`: Generates plots for all streams and channels in a session.
+- `carac-kit extract <experiment_path> --stream <name>`: Extracts data from a specific stream.
 
-## Data Format & Session Structure
+## Client Library (`carac` package)
 
-Data is stored in a session-based structure. When a new experiment is started, a new session folder is created.
+The `carac` Python package is the SDK for interacting with the server.
 
-- **Session Directory**: Contains all recordings for an experiment.
-- **`meta.json`**: A top-level file in the session directory that defines all data streams and their channels (e.g., `load_cell/Fx`, `robot/joint_1`).
-- **Binary Files**: Each recording is saved to a custom binary format optimized for high-frequency time-series data with microsecond precision.
+### Orchestrator
 
-## API Reference
+The `carac.orchestrator.Orchestrator` class is the main entry point for client-side scripting. It provides an `async` context manager to handle the connection to the server's HTTP API.
 
-### HTTP Endpoints (Server)
+### Instructions
 
-The server exposes a simple HTTP API for the client.
+All actions are defined as `Instruction` objects, which are sent to the server in a list and executed sequentially.
 
-- `POST /new-experiment`: Creates a new experiment session.
-- `POST /save-experiment`: Closes and saves the current session.
-- `POST /execute`: Executes a sequence of instructions without recording data.
-- `POST /record`: Executes a sequence of instructions while recording data.
-- `POST /start-recording`: Manually starts data recording.
-- `POST /stop-recording`: Manually stops data recording and saves the file.
-- `GET /progress`: Get the robot trajectory progress (move ID)
-- `GET /status`: Returns the system health status.
+- **`Robot(Move(Motion))`**: Commands the robot arm to perform a move (Linear, Direct, Joint, Circular).
+- **`Robot(SetProfile(Profile))`**: Sets the robot's speed and acceleration profile.
+- **`Wind(SetFanSpeed(speed))`**: Sets the wind tunnel fan speed (0.0 to 1.0).
+- **`Device(name, [values])`**: Sends a command to a generic UDP device.
+- **`Load(SetBias())`**: Tares the load cell.
+- **`Sleep(duration_s)`**: Pauses execution for a specified duration.
+- **`Reset()`**: Clears all hardware errors.
 
-### Python SDK (`carac` package)
-
-The `Orchestrator` client provides a high-level async interface for writing experiments.
+### Example Experiment Script
 
 ```python
-# Example from an experiment script
+# From an experiment script in client/src/experiments/
 from carac.prelude import *
+from asyncio import run
+
+WORK_POINT = Points.DroneBase.add(Point(x=500))
 
 async def main():
-    # Connect to the server
     async with Orchestrator() as o:
-        # 1. Initialize hardware and move to a starting point
-        await init(o)
+        # 1. Initialize hardware
+        await o.execute([
+            Reset(),
+            Robot(SetProfile(Profiles.Medium)),
+            Robot(SetToolOffset(Offsets.Drone)),
+            Robot(Move(MotionLinear(WORK_POINT))),
+            Robot(WaitSettled()),
+            Wind(SetPowered(True)),
+        ])
 
-        # 2. Define and run the main experimental procedure
-        await o.new_experiment("my_awesome_experiment")
+        # 2. Run experimental procedure
+        await o.new_experiment("my_pitch_sweep")
+        await o.execute([Load(SetBias())])
 
-        # The entire batch of instructions are executed in sequence and recorded
-        # with precise timing on the orchestrator server
         await o.record([
-            Robot(Move(MotionLinear(target_pose))),
-            Sleep(2.0),
-            Robot(Move(MotionLinear(start_pose))),
+            Wind(SetFanSpeed(0.5)),
+            Wind(WaitSettled()),
+            Robot(Move(MotionLinear(WORK_POINT.add(Point(rx=20))))), # Pitch up
+            Robot(WaitSettled()),
+            Sleep(1.0),
+            Robot(Move(MotionLinear(WORK_POINT.add(Point(rx=-20))))), # Pitch down
+            Robot(WaitSettled()),
         ])
 
         await o.save_experiment()
 
-        # 3. Return hardware to a safe state
-        await finalise(o)
+        # 3. Return to safe state
+        await o.execute([
+            Wind(SetFanSpeed(0.0)),
+            Robot(ReturnHome()),
+        ])
+
+if __name__ == "__main__":
+    run(main())
 ```
+
+## Data Format & Session Structure
+
+- **Session Directory**: Contains all recordings for an experiment.
+- **`meta.json`**: A top-level file defining all data streams and their channels (e.g., `load/fx`, `robot/x`).
+- **Binary Files**: Each recording is saved to a custom binary format optimized for high-frequency time-series data.
 
 ## Project Structure
 
 ```
 project-carac/
 ├── client/
-│   ├── carac/          # Core Python SDK (Orchestrator client, helpers)
-│   ├── experiments/    # Runnable experiment scripts
-│   ├── pipeline/       # Data processing and correction scripts
-│   ├── report/         # Plotting and report generation
-│   ├── training/       # Machine learning models
-│   └── pyproject.toml  # Project definition and dependencies
+│   ├── src/
+│   │   ├── carac/          # Core Python SDK
+│   │   ├── experiments/    # Runnable experiment scripts
+│   │   ├── pipeline/       # Data processing and correction scripts
+│   │   ├── report/         # Plotting and report generation
+│   │   └── training/       # Machine learning models
+│   └── pyproject.toml
 │
-└── server/
-    ├── src/
-    │   ├── bin/        # Entrypoints for `carac` and `carac-kit`
-    │   ├── config.rs   # Configuration structures
-    │   ├── data/       # Data handling, formats, DataSink, Orchestrator logic
-    │   └── hardware/   # Hardware abstraction layer
-    └── Cargo.toml      # Rust project definition
+├── server/
+│   ├── src/
+│   │   ├── bin/            # Entrypoints for `carac` and `carac-kit`
+│   │   ├── cli/            # Command-line interface logic
+│   │   ├── config.rs       # Configuration structures
+│   │   ├── data/           # Data handling, Orchestrator logic
+│   │   └── hardware/       # Hardware abstraction layer
+│   └── Cargo.toml
+│
+└── support/
+    ├── drone_relay/        # Example UDP relay for custom devices
+    └── remote-control/     # Stäubli VAL3 robot controller program
 ```

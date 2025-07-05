@@ -4,7 +4,7 @@ from typing import TypedDict
 import matplotlib.pyplot as plt
 
 
-DATA_PATH = (Path(__file__).parent / "../../../../data").resolve()
+DATA_PATH = (Path(__file__).parent / "../../../data").resolve()
 
 INPUT_PATH = DATA_PATH / "unprocessed"
 OUTPUT_PATH = DATA_PATH / "processed"
@@ -16,6 +16,11 @@ DPI_IMAGE = 600
 TIKZ_SIZE = (5, 3)
 TIKZ_SIZE_L = (8, 6)
 TIKZ_SIZE_XL = (12, 8)
+
+LINE_WIDTH = 1.5
+POINT_ALPHA = 0.8
+POINT_SIZE = 2
+
 
 plt.rcParams["figure.figsize"] = (8, 6)
 plt.rcParams["figure.dpi"] = 100

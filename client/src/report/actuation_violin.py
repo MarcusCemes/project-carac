@@ -6,8 +6,6 @@ from .defs import *
 
 
 FILES_1 = (p for d in ["free-flight-3"] for p in OUTPUT_PATH.glob(f"{d}/*.parquet"))
-
-
 FILES_2 = (p for d in ["free-flight-3-ext"] for p in OUTPUT_PATH.glob(f"{d}/*.parquet"))
 
 

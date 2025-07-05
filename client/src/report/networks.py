@@ -49,7 +49,7 @@ LABELS = [
 
 MODEL_NAMES = {"model": "Analytical", "axis": "M1", "ff-all": "M3", "ff-": "M2"}
 
-MODEL_DIR: str | None = "250626_223226_normal"
+MODEL_DIR: str | None = None
 
 DEVICE = "cuda" if cuda.is_available() else "cpu"
 SUFFIXES = ["", "_model", "_mlp", "_lstm"]
@@ -134,9 +134,6 @@ def main():
 
         row[1].set_ylabel("Drag (N)")
         plot_models(df, "drag", models, row[1])
-
-    # for ax in axs.flat:
-    #     ax.set_xlim(16, 26)
 
     fig.savefig(
         PLOT_PATH / "free_flight_evaluation.svg", dpi=DPI_IMAGE, transparent=True
@@ -249,15 +246,6 @@ def plot_models(df: DataFrame, col: str, models: Models, ax: Axes):
         ax=ax,
         linewidth=0.8,
         alpha=0.6,
-        # color=[
-        #     "#F0561D",
-        #     "#B1380B",
-        #     "#63993D",
-        #     "#204D00",
-        #     "#5E40BE",
-        #     "#21134D",
-        # ],
-        # color=["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300"],
         color=[
             "#b30000",
             "#7c1158",
@@ -309,7 +297,6 @@ def plot_heatmap(df: DataFrame, ax: Axes | None = None) -> None:
     ax = ax if ax is not None else plt.gca()
 
     for coord in [(1, 0), (3, 1), (5, 1), (5, 2)]:
-        # ax.add_patch(Rectangle(coord, 2, 1, fill=False, edgecolor="#ff6361", lw=1.5))
         ax.add_patch(
             Rectangle(
                 coord,

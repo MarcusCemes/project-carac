@@ -118,16 +118,6 @@ SINE_PARAMS = [
 ]
 
 
-SINE_PARAMS_STRUCTURE = {
-    "x": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
-    "y": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
-    "z": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
-    "rx": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
-    "ry": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
-    "rz": [{"amp": 0, "freq": 0, "phase": 0}, {"amp": 0, "freq": 0, "phase": 0}],
-}
-
-
 # == Definitions == #
 
 # WORK_POINT = Points.DroneBase.add(Point(x=600, y=-50, z=-200))
@@ -145,7 +135,7 @@ async def main():
 
 
 async def init(o: Orchestrator) -> None:
-    with Status("Initialising free-flight experiment") as status:
+    with Status("Initialising free-flight experiment"):
         await o.execute(
             [
                 Reset(),
@@ -320,43 +310,6 @@ async def status_task(o: Orchestrator, ui: ExperimentTui) -> None:
         )
 
         await sleep(0.25)
-
-
-def plot_trajectory(points: list[Point]) -> None:
-    import matplotlib.pyplot as plt
-
-    x = [p.x for p in points]
-    y = [p.y for p in points]
-    z = [p.z for p in points]
-    rx = [p.rx for p in points]
-    ry = [p.ry for p in points]
-    rz = [p.rz for p in points]
-
-    fig, (ax1, ax2) = plt.subplots(
-        1,
-        2,
-        figsize=(16, 7),
-        subplot_kw={"projection": "3d"},
-    )
-
-    fig.suptitle("Robot Trajectory Visualization", fontsize=16)
-
-    ax1.plot(x, y, z)
-
-    ax1.set_title("Position Trajectory (meters)")
-    ax1.set_xlabel("X axis")
-    ax1.set_ylabel("Y axis")
-    ax1.set_zlabel("Z axis")
-
-    ax2.plot(rx, ry, rz)
-
-    ax2.set_title("Orientation Trajectory (radians)")
-    ax2.set_xlabel("RX axis (Pitch)")
-    ax2.set_ylabel("RY axis (Roll)")
-    ax2.set_zlabel("RZ axis (Yaw)")
-
-    plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
-    plt.show()
 
 
 def generate_sine_variation(
